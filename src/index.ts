@@ -9,9 +9,9 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getConfig } from "./config.js";
+import { getConfig, getToolFilterConfig, ToolFilterConfig } from "./config.js";
 import { JiraClient, JiraApiError } from "./auth/jira-client.js";
-import { allTools, handleTool } from "./tools/index.js";
+import { getFilteredTools, handleTool } from "./tools/index.js";
 import {
   resourceDefinitions,
   resourceTemplates,
@@ -43,9 +43,29 @@ function getClient(): JiraClient {
   return jiraClient;
 }
 
+// Cache tool filter config at startup
+const toolFilterConfig: ToolFilterConfig = getToolFilterConfig();
+const filteredTools = getFilteredTools(toolFilterConfig);
+
+// Log filtering info if any filtering is active
+if (toolFilterConfig.enabledCategories.length > 0) {
+  console.error(
+    `Tool categories enabled: ${toolFilterConfig.enabledCategories.join(", ")}`
+  );
+}
+if (toolFilterConfig.disabledTools.length > 0) {
+  console.error(
+    `Tools disabled: ${toolFilterConfig.disabledTools.join(", ")}`
+  );
+}
+if (filteredTools.length < 50) {
+  // Only log if significantly filtered
+  console.error(`Total tools available: ${filteredTools.length}`);
+}
+
 // Register tools list handler
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: allTools };
+  return { tools: filteredTools };
 });
 
 // Register tool call handler
@@ -54,7 +74,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     const client = getClient();
-    const result = await handleTool(client, name, args || {});
+    const result = await handleTool(client, name, args || {}, toolFilterConfig);
 
     return {
       content: [
