@@ -11,12 +11,39 @@ config({ path: ".env.local", override: true });
 // - No prefix / other: Classic API token
 export type TokenType = "scoped" | "classic";
 
+// Available tool categories
+export const ALL_CATEGORIES = [
+  "issue",
+  "search",
+  "project",
+  "user",
+  "board",
+  "sprint",
+  "epic",
+  "comment",
+  "attachment",
+  "worklog",
+  "issueLink",
+  "watcher",
+  "field",
+  "filter",
+  "group",
+  "server",
+] as const;
+
+export type ToolCategory = (typeof ALL_CATEGORIES)[number];
+
 export interface JiraConfig {
   host: string;
   email: string;
   apiToken: string;
   tokenType: TokenType;
   cloudId?: string; // Required for scoped tokens, can be auto-fetched
+}
+
+export interface ToolFilterConfig {
+  enabledCategories: ToolCategory[]; // Categories to enable (all if empty)
+  disabledTools: string[]; // Specific tools to disable
 }
 
 /**
@@ -66,5 +93,50 @@ export function getConfig(): JiraConfig {
     apiToken: apiToken!,
     tokenType,
     cloudId,
+  };
+}
+
+/**
+ * Get tool filtering configuration from environment variables
+ *
+ * JIRA_ENABLED_CATEGORIES: Comma-separated list of categories to enable
+ *   If not set, all categories are enabled
+ *   Example: "issue,search,project"
+ *
+ * JIRA_DISABLED_TOOLS: Comma-separated list of specific tool names to disable
+ *   Example: "jira_delete_issue,jira_delete_project"
+ */
+export function getToolFilterConfig(): ToolFilterConfig {
+  const enabledCategoriesEnv = process.env.JIRA_ENABLED_CATEGORIES;
+  const disabledToolsEnv = process.env.JIRA_DISABLED_TOOLS;
+
+  let enabledCategories: ToolCategory[] = [];
+
+  if (enabledCategoriesEnv) {
+    const requested = enabledCategoriesEnv
+      .split(",")
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+
+    // Validate categories
+    for (const cat of requested) {
+      if (ALL_CATEGORIES.includes(cat as ToolCategory)) {
+        enabledCategories.push(cat as ToolCategory);
+      } else {
+        console.error(`Warning: Unknown category "${cat}" in JIRA_ENABLED_CATEGORIES`);
+      }
+    }
+  }
+
+  const disabledTools = disabledToolsEnv
+    ? disabledToolsEnv
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0)
+    : [];
+
+  return {
+    enabledCategories,
+    disabledTools,
   };
 }

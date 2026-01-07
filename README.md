@@ -23,6 +23,24 @@ Set the following environment variables:
 | `JIRA_HOST` | Your Jira instance URL (e.g., `https://yourcompany.atlassian.net`) | Yes |
 | `JIRA_EMAIL` | Your Atlassian account email | Yes |
 | `JIRA_API_TOKEN` | API token from [Atlassian Account Settings](https://id.atlassian.com/manage-profile/security/api-tokens) | Yes |
+| `JIRA_ENABLED_CATEGORIES` | Comma-separated list of tool categories to enable (default: all) | No |
+| `JIRA_DISABLED_TOOLS` | Comma-separated list of specific tools to disable | No |
+
+### Tool Filtering
+
+You can limit which tools are exposed to the AI model using environment variables:
+
+**Enable only specific categories:**
+```bash
+JIRA_ENABLED_CATEGORIES=issue,search,project
+```
+
+**Disable specific tools (e.g., destructive operations):**
+```bash
+JIRA_DISABLED_TOOLS=jira_delete_issue,jira_delete_project,jira_delete_comment
+```
+
+**Available categories:** `issue`, `search`, `project`, `user`, `board`, `sprint`, `epic`, `comment`, `attachment`, `worklog`, `issueLink`, `watcher`, `field`, `filter`, `group`, `server`
 
 ## Claude Desktop Setup
 
@@ -41,6 +59,25 @@ Add to your Claude Desktop configuration file:
         "JIRA_HOST": "https://yourcompany.atlassian.net",
         "JIRA_EMAIL": "your-email@example.com",
         "JIRA_API_TOKEN": "your-api-token"
+      }
+    }
+  }
+}
+```
+
+**With tool filtering (recommended for limited access):**
+```json
+{
+  "mcpServers": {
+    "jira": {
+      "command": "npx",
+      "args": ["-y", "jira-mcp"],
+      "env": {
+        "JIRA_HOST": "https://yourcompany.atlassian.net",
+        "JIRA_EMAIL": "your-email@example.com",
+        "JIRA_API_TOKEN": "your-api-token",
+        "JIRA_ENABLED_CATEGORIES": "issue,search,project,comment",
+        "JIRA_DISABLED_TOOLS": "jira_delete_issue,jira_delete_project"
       }
     }
   }

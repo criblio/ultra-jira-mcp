@@ -1,4 +1,9 @@
 import { JiraClient } from "../auth/jira-client.js";
+import {
+  getToolFilterConfig,
+  ToolCategory,
+  ToolFilterConfig,
+} from "../config.js";
 
 // Import all tool definitions and handlers
 import { issueTools, handleIssueTool } from "./issues.js";
@@ -18,57 +23,117 @@ import { filterTools, handleFilterTool } from "./filters.js";
 import { groupTools, handleGroupTool } from "./groups.js";
 import { serverTools, handleServerTool } from "./server.js";
 
-// Export all tools as a single array
-export const allTools = [
-  ...issueTools,
-  ...searchTools,
-  ...projectTools,
-  ...userTools,
-  ...boardTools,
-  ...sprintTools,
-  ...epicTools,
-  ...commentTools,
-  ...attachmentTools,
-  ...worklogTools,
-  ...issueLinkTools,
-  ...watcherTools,
-  ...fieldTools,
-  ...filterTools,
-  ...groupTools,
-  ...serverTools,
-];
+// Tool type definition
+interface Tool {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+}
+
+// Map category names to their tools
+const toolsByCategory: Record<ToolCategory, Tool[]> = {
+  issue: issueTools,
+  search: searchTools,
+  project: projectTools,
+  user: userTools,
+  board: boardTools,
+  sprint: sprintTools,
+  epic: epicTools,
+  comment: commentTools,
+  attachment: attachmentTools,
+  worklog: worklogTools,
+  issueLink: issueLinkTools,
+  watcher: watcherTools,
+  field: fieldTools,
+  filter: filterTools,
+  group: groupTools,
+  server: serverTools,
+};
+
+// Export all tools as a single array (unfiltered)
+export const allTools: Tool[] = Object.values(toolsByCategory).flat();
 
 // Map of tool names to their categories for routing
-const toolCategories: Record<string, string> = {};
+const toolCategories: Record<string, ToolCategory> = {};
 
 // Populate tool categories
-issueTools.forEach((t) => (toolCategories[t.name] = "issue"));
-searchTools.forEach((t) => (toolCategories[t.name] = "search"));
-projectTools.forEach((t) => (toolCategories[t.name] = "project"));
-userTools.forEach((t) => (toolCategories[t.name] = "user"));
-boardTools.forEach((t) => (toolCategories[t.name] = "board"));
-sprintTools.forEach((t) => (toolCategories[t.name] = "sprint"));
-epicTools.forEach((t) => (toolCategories[t.name] = "epic"));
-commentTools.forEach((t) => (toolCategories[t.name] = "comment"));
-attachmentTools.forEach((t) => (toolCategories[t.name] = "attachment"));
-worklogTools.forEach((t) => (toolCategories[t.name] = "worklog"));
-issueLinkTools.forEach((t) => (toolCategories[t.name] = "issueLink"));
-watcherTools.forEach((t) => (toolCategories[t.name] = "watcher"));
-fieldTools.forEach((t) => (toolCategories[t.name] = "field"));
-filterTools.forEach((t) => (toolCategories[t.name] = "filter"));
-groupTools.forEach((t) => (toolCategories[t.name] = "group"));
-serverTools.forEach((t) => (toolCategories[t.name] = "server"));
+for (const [category, tools] of Object.entries(toolsByCategory)) {
+  for (const tool of tools) {
+    toolCategories[tool.name] = category as ToolCategory;
+  }
+}
+
+/**
+ * Get filtered tools based on environment configuration
+ *
+ * Filtering rules:
+ * 1. If JIRA_ENABLED_CATEGORIES is set, only include tools from those categories
+ * 2. Remove any tools listed in JIRA_DISABLED_TOOLS
+ */
+export function getFilteredTools(filterConfig?: ToolFilterConfig): Tool[] {
+  const config = filterConfig ?? getToolFilterConfig();
+
+  let tools = allTools;
+
+  // Filter by enabled categories (if specified)
+  if (config.enabledCategories.length > 0) {
+    const enabledSet = new Set(config.enabledCategories);
+    tools = tools.filter((tool) => {
+      const category = toolCategories[tool.name];
+      return category && enabledSet.has(category);
+    });
+  }
+
+  // Remove disabled tools
+  if (config.disabledTools.length > 0) {
+    const disabledSet = new Set(config.disabledTools);
+    tools = tools.filter((tool) => !disabledSet.has(tool.name));
+  }
+
+  return tools;
+}
+
+/**
+ * Check if a tool is enabled based on the filter configuration
+ */
+export function isToolEnabled(
+  toolName: string,
+  filterConfig?: ToolFilterConfig
+): boolean {
+  const config = filterConfig ?? getToolFilterConfig();
+
+  // Check if tool is explicitly disabled
+  if (config.disabledTools.includes(toolName)) {
+    return false;
+  }
+
+  // Check if category filtering is enabled
+  if (config.enabledCategories.length > 0) {
+    const category = toolCategories[toolName];
+    if (!category || !config.enabledCategories.includes(category)) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 // Main tool handler that routes to the appropriate category handler
 export async function handleTool(
   client: JiraClient,
   toolName: string,
-  args: unknown
+  args: unknown,
+  filterConfig?: ToolFilterConfig
 ): Promise<unknown> {
   const category = toolCategories[toolName];
 
   if (!category) {
     throw new Error(`Unknown tool: ${toolName}`);
+  }
+
+  // Check if tool is enabled
+  if (!isToolEnabled(toolName, filterConfig)) {
+    throw new Error(`Tool "${toolName}" is disabled`);
   }
 
   switch (category) {
