@@ -1,5 +1,5 @@
 import { generateText, LanguageModel, Tool, ToolSet, stepCountIs } from 'ai';
-import { getModel } from '../model.js';
+import { getModel, getModelRouter } from '../model.js';
 import { SafetyChecker } from '../validation/safety-checker.js';
 import { ChangeValidator } from '../validation/change-validator.js';
 import {
@@ -134,15 +134,48 @@ export abstract class BaseAgent<TInput, TOutput> {
       } as Tool<any, any>;
     }
 
-    const { text } = await generateText({
-      model: this.model,
-      tools: wrappedTools,
-      stopWhen: stepCountIs(this.maxSteps),
-      system: systemPrompt,
-      prompt: userPrompt,
-    });
+    // Try with automatic provider fallback on API errors
+    let lastError: Error | null = null;
+    const router = getModelRouter();
+    // Try all configured providers - each provider gets one attempt
+    const maxRetries = router.getProviderCount();
 
-    return { text, proposedChanges, toolCalls };
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const { text } = await generateText({
+          model: this.model,
+          tools: wrappedTools,
+          stopWhen: stepCountIs(this.maxSteps),
+          system: systemPrompt,
+          prompt: userPrompt,
+        });
+
+        return { text, proposedChanges, toolCalls };
+      } catch (error) {
+        lastError = error as Error;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        // Check if it's an API limit/rate limit error
+        const isRateLimitError =
+          errorMessage.includes('rate limit') ||
+          errorMessage.includes('quota') ||
+          errorMessage.includes('429') ||
+          errorMessage.includes('too many requests') ||
+          errorMessage.includes('resource exhausted');
+
+        if (isRateLimitError && router.hasMoreProviders() && attempt < maxRetries - 1) {
+          this.log('warn', `API limit hit with ${router.getCurrentProviderName()}, switching to next provider`, { error: errorMessage });
+          this.model = router.switchToNextProvider();
+          continue;
+        }
+
+        // Not a rate limit error or no more providers, throw
+        throw error;
+      }
+    }
+
+    // All retries exhausted
+    throw lastError || new Error('Failed to generate text after retries');
   }
 
   /**

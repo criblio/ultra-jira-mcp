@@ -3,6 +3,9 @@ name: Dependabot Auto-Merge
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '.github/workflows/**'
+      - '**.md'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -17,6 +20,7 @@ permissions:
 jobs:
   test-and-merge:
     runs-on: ubuntu-latest
+    environment: jira-mcp
     # For pull_request events, only run for dependabot PRs from the same repo. For workflow_dispatch, always run.
     if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
 
@@ -113,7 +117,7 @@ jobs:
 
           echo "Created issue #$ISSUE_NUM"
 
-          # Run bug-fix agent
+          # Run bug-fix agent with multi-provider support
           cd scripts/agents
           ISSUE_NUMBER=$ISSUE_NUM CREATE_PR=false npx tsx src/agents/bug-fix-agent.ts
 
@@ -121,8 +125,16 @@ jobs:
           gh issue close $ISSUE_NUM --comment "Migration applied automatically"
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # AI Provider API Keys - At least one required, router will use all available
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Build (attempt 2)
         if: steps.check-major-bump.outputs.is_major_bump == 'true'

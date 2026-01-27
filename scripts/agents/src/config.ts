@@ -11,7 +11,16 @@ config({ path: resolve(__dirname, '../.env') });
 
 export interface AgentConfig {
   // Google AI
-  googleApiKey: string;
+  googleApiKey?: string;
+
+  // Multiple AI Provider Support (for model router)
+  groqApiKey?: string;
+  openaiApiKey?: string;
+  anthropicApiKey?: string;
+  mistralApiKey?: string;
+  perplexityApiKey?: string;
+  deepseekApiKey?: string;
+  openrouterApiKey?: string;
 
   // GitHub
   githubToken: string;
@@ -28,10 +37,18 @@ export interface AgentConfig {
 
 export function getConfig(): AgentConfig {
   const googleApiKey = process.env.GOOGLE_API_KEY;
+  const groqApiKey = process.env.GROQ_API_KEY;
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  const mistralApiKey = process.env.MISTRAL_API_KEY;
+  const perplexityApiKey = process.env.PERPLEXITY_API_KEY;
+  const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+  const openrouterApiKey = process.env.OPENROUTER_API_KEY;
   const githubToken = process.env.GITHUB_TOKEN;
 
-  if (!googleApiKey) {
-    throw new Error('GOOGLE_API_KEY environment variable is required');
+  // Require at least one AI provider API key
+  if (!googleApiKey && !groqApiKey && !openaiApiKey && !anthropicApiKey && !mistralApiKey && !perplexityApiKey && !deepseekApiKey && !openrouterApiKey) {
+    throw new Error('At least one AI provider API key is required (GOOGLE_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, MISTRAL_API_KEY, PERPLEXITY_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY)');
   }
 
   if (!githubToken) {
@@ -56,6 +73,13 @@ export function getConfig(): AgentConfig {
 
   return {
     googleApiKey,
+    groqApiKey,
+    openaiApiKey,
+    anthropicApiKey,
+    mistralApiKey,
+    perplexityApiKey,
+    deepseekApiKey,
+    openrouterApiKey,
     githubToken,
     repoOwner,
     repoName,
