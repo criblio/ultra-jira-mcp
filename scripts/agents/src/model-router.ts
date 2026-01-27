@@ -1,13 +1,16 @@
 import { LanguageModel } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createGroq } from '@ai-sdk/groq';
+import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createMistral } from '@ai-sdk/mistral';
+import { createPerplexity } from '@ai-sdk/perplexity';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { getConfig } from './config.js';
 
 export interface ModelProvider {
   name: string;
-  createModel: () => LanguageModel | null;
+  createModel: () => any; // Accept any language model version (v1, v2, v3)
   priority: number;
 }
 
@@ -53,42 +56,34 @@ export class ModelRouter {
       },
 
       // 2. Groq - Very fast inference, generous free tier
-      // NOTE: Disabled - Groq models not compatible with AI SDK v6 (requires spec v2, Groq uses v1)
-      // {
-      //   name: 'groq',
-      //   priority: 2,
-      //   createModel: () => {
-      //     if (!config.groqApiKey) return null;
-      //     try {
-      //       const groq = createOpenAI({
-      //         apiKey: config.groqApiKey,
-      //         baseURL: 'https://api.groq.com/openai/v1',
-      //       });
-      //       return groq('llama-3.3-70b-versatile');
-      //     } catch {
-      //       return null;
-      //     }
-      //   },
-      // },
+      {
+        name: 'groq',
+        priority: 2,
+        createModel: () => {
+          if (!config.groqApiKey) return null;
+          try {
+            const groq = createGroq({ apiKey: config.groqApiKey });
+            return groq('llama-3.3-70b-versatile');
+          } catch {
+            return null;
+          }
+        },
+      },
 
       // 3. DeepSeek - Very affordable, good performance
-      // NOTE: Disabled - DeepSeek uses OpenAI-compatible API with spec v1, AI SDK v6 requires v2
-      // {
-      //   name: 'deepseek',
-      //   priority: 3,
-      //   createModel: () => {
-      //     if (!config.deepseekApiKey) return null;
-      //     try {
-      //       const deepseek = createOpenAI({
-      //         apiKey: config.deepseekApiKey,
-      //         baseURL: 'https://api.deepseek.com',
-      //       });
-      //       return deepseek('deepseek-chat');
-      //     } catch {
-      //       return null;
-      //     }
-      //   },
-      // },
+      {
+        name: 'deepseek',
+        priority: 3,
+        createModel: () => {
+          if (!config.deepseekApiKey) return null;
+          try {
+            const deepseek = createDeepSeek({ apiKey: config.deepseekApiKey });
+            return deepseek('deepseek-chat');
+          } catch {
+            return null;
+          }
+        },
+      },
 
       // 4. OpenAI - Reliable but can be rate limited
       {
@@ -121,23 +116,19 @@ export class ModelRouter {
       },
 
       // 6. Perplexity - Good for reasoning tasks
-      // NOTE: Disabled - Perplexity uses OpenAI-compatible API with spec v1, AI SDK v6 requires v2
-      // {
-      //   name: 'perplexity',
-      //   priority: 6,
-      //   createModel: () => {
-      //     if (!config.perplexityApiKey) return null;
-      //     try {
-      //       const perplexity = createOpenAI({
-      //         apiKey: config.perplexityApiKey,
-      //         baseURL: 'https://api.perplexity.ai',
-      //       });
-      //       return perplexity('llama-3.1-sonar-small-128k-online');
-      //     } catch {
-      //       return null;
-      //     }
-      //   },
-      // },
+      {
+        name: 'perplexity',
+        priority: 6,
+        createModel: () => {
+          if (!config.perplexityApiKey) return null;
+          try {
+            const perplexity = createPerplexity({ apiKey: config.perplexityApiKey });
+            return perplexity('llama-3.1-sonar-small-128k-online');
+          } catch {
+            return null;
+          }
+        },
+      },
 
       // 7. OpenRouter - Access to many models through one API
       // NOTE: Disabled - OpenRouter uses OpenAI-compatible API with spec v1, AI SDK v6 requires v2
