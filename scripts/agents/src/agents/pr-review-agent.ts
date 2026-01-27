@@ -109,9 +109,9 @@ Focus areas: ${input.focusAreas?.join(', ') || 'all areas'}
 Suggest tests: ${input.suggestTests !== false ? 'yes' : 'no'}
 
 Steps:
-1. Use getPullRequest to get the PR details including the head SHA
+1. Use getPullRequest to get the PR details - it returns headSha (commit SHA)
 2. Use getPullRequestFiles to get the list of changed files and their diffs (patches)
-3. For each important changed file, use getFileContents with the PR's head SHA to read the full file
+3. For each important changed file, use getFileContents with the headSha as the ref parameter to read the full file
 4. Analyze the changes in the patches (diffs) for:
    - Security issues (injection, XSS, auth bypass, etc.)
    - Logic errors and edge cases
