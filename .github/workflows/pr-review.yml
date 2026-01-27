@@ -58,7 +58,19 @@ jobs:
             echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check PR State
+        id: pr-state
+        run: |
+          PR_STATE=$(gh pr view ${{ steps.pr-number.outputs.pr_number }} --json state --jq .state)
+          echo "state=$PR_STATE" >> $GITHUB_OUTPUT
+          if [ "$PR_STATE" != "OPEN" ]; then
+            echo "PR is $PR_STATE, skipping review"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run PR Review Agent
+        if: steps.pr-state.outputs.state == 'OPEN'
         id: pr-review-agent
         run: npx tsx scripts/agents/src/agents/pr-review-agent.ts
         env:
@@ -74,9 +86,13 @@ jobs:
         run: |
           echo "## PR Review Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The PR Review Agent has completed analyzing PR #${{ steps.pr-number.outputs.pr_number }}." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- PR Number: #${{ steps.pr-number.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Focus Areas: ${{ inputs.focus_areas || 'security,logic,tests' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Suggest Tests: ${{ inputs.suggest_tests || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.pr-state.outputs.state }}" != "OPEN" ]; then
+            echo "PR #${{ steps.pr-number.outputs.pr_number }} is ${{ steps.pr-state.outputs.state }}, review skipped." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "The PR Review Agent has completed analyzing PR #${{ steps.pr-number.outputs.pr_number }}." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+            echo "- PR Number: #${{ steps.pr-number.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Focus Areas: ${{ inputs.focus_areas || 'security,logic,tests' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Suggest Tests: ${{ inputs.suggest_tests || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          fi
