@@ -18,15 +18,15 @@ export interface ModelProvider {
 /**
  * Model Router - Automatically falls back to different providers when API limits are hit
  *
- * Supports providers with free/unpaid tiers:
- * - Google Gemini (flash models)
- * - Groq (fast inference)
- * - OpenAI (with free tier)
- * - Anthropic Claude (with free tier)
- * - Mistral AI
- * - DeepSeek
- * - Perplexity
- * - OpenRouter (access to many models)
+ * Priority order: Free tiers first, then paid options
+ * - Groq (generous free tier, fast inference)
+ * - Google Gemini (generous free tier, flash models)
+ * - OpenRouter (free tier for select models)
+ * - Codestral (Mistral's free coding model)
+ * - DeepSeek (paid: ~$0.14-0.27 per 1M tokens)
+ * - OpenAI ($5 trial credits, then paid: ~$0.15-0.60 per 1M tokens)
+ * - Perplexity (paid: ~$0.20-$5 per 1M tokens)
+ * - Anthropic Claude (pay-as-you-go)
  */
 export class ModelRouter {
   private providers: ModelProvider[] = [];
@@ -39,27 +39,12 @@ export class ModelRouter {
   private initializeProviders(): void {
     const config = getConfig();
 
-    // Priority order: best for code first, then speed/cost optimized
+    // Priority order: free tiers first, then paid options
     const providerConfigs: ModelProvider[] = [
-      // 1. DeepSeek Coder - Best for code review, trained specifically for code
-      {
-        name: 'deepseek',
-        priority: 1,
-        createModel: () => {
-          if (!config.deepseekApiKey) return null;
-          try {
-            const deepseek = createDeepSeek({ apiKey: config.deepseekApiKey });
-            return deepseek('deepseek-coder');
-          } catch {
-            return null;
-          }
-        },
-      },
-
-      // 2. Groq - Very fast inference, generous free tier
+      // 1. Groq - Very fast inference, generous free tier
       {
         name: 'groq',
-        priority: 2,
+        priority: 1,
         createModel: () => {
           if (!config.groqApiKey) return null;
           try {
@@ -71,10 +56,10 @@ export class ModelRouter {
         },
       },
 
-      // 3. Google Gemini Flash - Fast and has good free tier
+      // 2. Google Gemini Flash - Fast and has good free tier
       {
         name: 'google-gemini',
-        priority: 3,
+        priority: 2,
         createModel: () => {
           if (!config.googleApiKey) return null;
           try {
@@ -86,10 +71,10 @@ export class ModelRouter {
         },
       },
 
-      // 4. OpenRouter - Access to 300+ models with internal fallback chain
+      // 3. OpenRouter - Access to 300+ models with internal fallback chain
       {
         name: 'openrouter',
-        priority: 4,
+        priority: 3,
         createModel: () => {
           if (!config.openrouterApiKey) return null;
           try {
@@ -110,10 +95,43 @@ export class ModelRouter {
         },
       },
 
-      // 5. OpenAI - Reliable but can be rate limited
+      // 4. Codestral - Mistral's specialized coding model (free tier for experimentation)
+      {
+        name: 'mistral',
+        priority: 4,
+        createModel: () => {
+          if (!config.mistralApiKey) return null;
+          try {
+            const mistral = createMistral({
+              apiKey: config.mistralApiKey,
+              baseURL: 'https://codestral.mistral.ai/v1',
+            });
+            return mistral('codestral-latest');
+          } catch {
+            return null;
+          }
+        },
+      },
+
+      // 5. DeepSeek Coder - Best for code review, trained specifically for code (PAID but very cheap)
+      {
+        name: 'deepseek',
+        priority: 5,
+        createModel: () => {
+          if (!config.deepseekApiKey) return null;
+          try {
+            const deepseek = createDeepSeek({ apiKey: config.deepseekApiKey });
+            return deepseek('deepseek-coder');
+          } catch {
+            return null;
+          }
+        },
+      },
+
+      // 6. OpenAI - Reliable but can be rate limited ($5 trial credits, then PAID: ~$0.15-0.60 per 1M tokens)
       {
         name: 'openai',
-        priority: 5,
+        priority: 6,
         createModel: () => {
           if (!config.openaiApiKey) return null;
           try {
@@ -125,22 +143,7 @@ export class ModelRouter {
         },
       },
 
-      // 6. Mistral AI - Good balance of speed and quality
-      {
-        name: 'mistral',
-        priority: 6,
-        createModel: () => {
-          if (!config.mistralApiKey) return null;
-          try {
-            const mistral = createMistral({ apiKey: config.mistralApiKey });
-            return mistral('mistral-small-latest');
-          } catch {
-            return null;
-          }
-        },
-      },
-
-      // 7. Perplexity - Good for reasoning tasks
+      // 7. Perplexity - Good for reasoning tasks (PAID: $0.20-$5 per 1M tokens)
       {
         name: 'perplexity',
         priority: 7,
@@ -155,7 +158,7 @@ export class ModelRouter {
         },
       },
 
-      // 8. Anthropic Claude - High quality fallback
+      // 8. Anthropic Claude - High quality fallback (pay-as-you-go)
       {
         name: 'anthropic',
         priority: 8,

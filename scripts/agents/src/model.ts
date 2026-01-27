@@ -10,15 +10,15 @@ const DEFAULT_MODEL_ID = 'gemini-flash-latest';
  * Get the configured AI model with automatic fallback support
  * Uses Vercel AI SDK for unified multi-provider abstraction
  *
- * Will automatically try multiple providers in order:
- * 1. DeepSeek Coder (best for code review)
- * 2. Groq (very fast, generous free tier)
- * 3. Google Gemini (fast, good free tier)
- * 4. OpenRouter (access to many models)
- * 5. OpenAI (reliable)
- * 6. Mistral (balanced)
- * 7. Perplexity (reasoning)
- * 8. Anthropic Claude (high quality)
+ * Will automatically try multiple providers in order (free first):
+ * 1. Groq (very fast, generous free tier)
+ * 2. Google Gemini (fast, good free tier)
+ * 3. OpenRouter (access to many free models)
+ * 4. Codestral (Mistral's free specialized coding model)
+ * 5. DeepSeek Coder (paid: ~$0.14-0.27/1M tokens)
+ * 6. OpenAI ($5 trial credits, then paid: ~$0.15-0.60/1M tokens)
+ * 7. Perplexity (paid: ~$0.20-$5/1M tokens)
+ * 8. Anthropic Claude (pay-as-you-go)
  */
 export function getModel(): LanguageModel {
   // Use router if USE_MODEL_ROUTER is enabled (default: true)
