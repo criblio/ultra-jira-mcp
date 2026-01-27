@@ -28,8 +28,7 @@ jobs:
           fi
 
           for pr in $dependabot_prs; do
-            echo "Syncing PR #$pr with main..."
-            gh pr view $pr --json headRefName --jq '.headRefName' | xargs -I {} git fetch origin {}:{}
+            echo "Requesting rebase for PR #$pr..."
             gh pr comment $pr --body "@dependabot rebase"
           done
         env:
