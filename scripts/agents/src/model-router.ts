@@ -53,22 +53,23 @@ export class ModelRouter {
       },
 
       // 2. Groq - Very fast inference, generous free tier
-      {
-        name: 'groq',
-        priority: 2,
-        createModel: () => {
-          if (!config.groqApiKey) return null;
-          try {
-            const groq = createOpenAI({
-              apiKey: config.groqApiKey,
-              baseURL: 'https://api.groq.com/openai/v1',
-            });
-            return groq('llama-3.3-70b-versatile');
-          } catch {
-            return null;
-          }
-        },
-      },
+      // NOTE: Disabled - Groq models not compatible with AI SDK v6 (requires spec v2, Groq uses v1)
+      // {
+      //   name: 'groq',
+      //   priority: 2,
+      //   createModel: () => {
+      //     if (!config.groqApiKey) return null;
+      //     try {
+      //       const groq = createOpenAI({
+      //         apiKey: config.groqApiKey,
+      //         baseURL: 'https://api.groq.com/openai/v1',
+      //       });
+      //       return groq('llama-3.3-70b-versatile');
+      //     } catch {
+      //       return null;
+      //     }
+      //   },
+      // },
 
       // 3. DeepSeek - Very affordable, good performance
       {
