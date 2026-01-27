@@ -18,6 +18,12 @@ on:
         description: 'Create PRs for fixes'
         type: boolean
         default: true
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.github/workflows/**'
+      - '**.md'
 
 permissions:
   contents: write
@@ -56,12 +62,20 @@ jobs:
         id: bug-fix-agent
         run: npx tsx scripts/agents/src/agents/bug-fix-agent.ts
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ inputs.issue_number || '' }}
           MAX_ISSUES: ${{ inputs.max_issues || '3' }}
           CREATE_PR: ${{ inputs.create_pr || 'true' }}
+          # AI Provider API Keys - At least one required, router will use all available
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Post summary
         if: always()
