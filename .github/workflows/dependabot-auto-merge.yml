@@ -36,6 +36,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: refs/pull/${{ steps.pr-info.outputs.pr_number }}/head
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -46,11 +52,98 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      - name: Build (attempt 1)
+        id: build-attempt-1
+        continue-on-error: true
         run: npm run build
 
-      - name: Run tests
+      - name: Test (attempt 1)
+        id: test-attempt-1
+        if: steps.build-attempt-1.outcome == 'success'
+        continue-on-error: true
         run: npm test
+
+      - name: Check if major version bump
+        id: check-major-bump
+        if: steps.build-attempt-1.outcome == 'failure' || steps.test-attempt-1.outcome == 'failure'
+        run: |
+          TITLE="${{ github.event.pull_request.title }}"
+          if echo "$TITLE" | grep -qP 'Bump.*from \d+\.\d+\.\d+ to \d+\.\d+\.\d+'; then
+            FROM_VERSION=$(echo "$TITLE" | grep -oP 'from \K\d+\.\d+\.\d+')
+            TO_VERSION=$(echo "$TITLE" | grep -oP 'to \K\d+\.\d+\.\d+')
+            FROM_MAJOR=$(echo "$FROM_VERSION" | cut -d. -f1)
+            TO_MAJOR=$(echo "$TO_VERSION" | cut -d. -f1)
+
+            if [ "$FROM_MAJOR" != "$TO_MAJOR" ]; then
+              echo "is_major_bump=true" >> $GITHUB_OUTPUT
+              PACKAGE=$(echo "$TITLE" | grep -oP 'Bump \K[^ ]+')
+              echo "package=$PACKAGE" >> $GITHUB_OUTPUT
+              echo "from_version=$FROM_VERSION" >> $GITHUB_OUTPUT
+              echo "to_version=$TO_VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "is_major_bump=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "is_major_bump=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Let AI fix migration issues
+        if: steps.check-major-bump.outputs.is_major_bump == 'true'
+        run: |
+          echo "Major version bump detected: ${{ steps.check-major-bump.outputs.package }} ${{ steps.check-major-bump.outputs.from_version }} → ${{ steps.check-major-bump.outputs.to_version }}"
+          echo "Asking bug-fix agent to handle migration..."
+
+          # Create a temporary issue for the migration
+          ISSUE_BODY="Dependency upgrade requires code changes:
+
+          Package: ${{ steps.check-major-bump.outputs.package }}
+          From: ${{ steps.check-major-bump.outputs.from_version }}
+          To: ${{ steps.check-major-bump.outputs.to_version }}
+
+          Build status: ${{ steps.build-attempt-1.outcome }}
+          Test status: ${{ steps.test-attempt-1.outcome }}
+
+          Please update the code to be compatible with the new version."
+
+          ISSUE_NUM=$(gh issue create \
+            --title "Migration needed: ${{ steps.check-major-bump.outputs.package }} v${{ steps.check-major-bump.outputs.to_version }}" \
+            --body "$ISSUE_BODY" \
+            --label "bug,dependency-migration" \
+            --assignee "@me" | grep -oP '\d+$')
+
+          echo "Created issue #$ISSUE_NUM"
+
+          # Run bug-fix agent
+          cd scripts/agents
+          ISSUE_NUMBER=$ISSUE_NUM CREATE_PR=false npx tsx src/agents/bug-fix-agent.ts
+
+          # Close the issue
+          gh issue close $ISSUE_NUM --comment "Migration applied automatically"
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Build (attempt 2)
+        if: steps.check-major-bump.outputs.is_major_bump == 'true'
+        run: npm run build
+
+      - name: Run tests (attempt 2)
+        if: steps.check-major-bump.outputs.is_major_bump == 'true'
+        run: npm test
+
+      - name: Push fixes if any
+        if: steps.check-major-bump.outputs.is_major_bump == 'true'
+        run: |
+          if git diff --quiet; then
+            echo "No changes to push"
+          else
+            git add -A
+            git commit -m "Apply migration fixes for ${{ steps.check-major-bump.outputs.package }} v${{ steps.check-major-bump.outputs.to_version }}
+
+            Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+            git push
+          fi
 
       - name: Enable auto-merge
         if: success()
