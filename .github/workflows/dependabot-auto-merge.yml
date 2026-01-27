@@ -62,4 +62,4 @@ jobs:
         if: success()
         run: gh pr review --approve "${{ steps.pr-info.outputs.pr_number }}"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
