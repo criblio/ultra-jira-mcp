@@ -1,0 +1,36 @@
+name: Dependabot Auto-Sync
+
+on:
+  schedule:
+    # Run every day at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-dependabot-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Sync Dependabot PRs
+        run: |
+          # Get all open PRs by dependabot
+          dependabot_prs=$(gh pr list --author "app/dependabot" --state open --json number --jq '.[].number')
+
+          if [ -z "$dependabot_prs" ]; then
+            echo "No open Dependabot PRs found"
+            exit 0
+          fi
+
+          for pr in $dependabot_prs; do
+            echo "Syncing PR #$pr with main..."
+            gh pr view $pr --json headRefName --jq '.headRefName' | xargs -I {} git fetch origin {}:{}
+            gh pr comment $pr --body "@dependabot rebase"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
