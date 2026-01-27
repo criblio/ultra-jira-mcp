@@ -243,18 +243,28 @@ export function createGitHubTools(repoOwner: string, repoName: string) {
     }),
 
     /**
-     * Create a review on a pull request
+     * Create a review on a pull request with optional inline comments
      */
     createReview: tool({
-      description: 'Submit a review on a pull request',
+      description: 'Submit a review on a pull request with optional inline comments on specific lines',
       inputSchema: z.object({
         prNumber: z.number().describe('PR number'),
         body: z.string().describe('Review summary'),
         event: z
           .enum(['APPROVE', 'REQUEST_CHANGES', 'COMMENT'])
           .describe('Review action'),
+        comments: z.array(z.object({
+          path: z.string().describe('File path'),
+          line: z.number().describe('Line number in the diff to comment on'),
+          body: z.string().describe('Comment text'),
+        })).optional().describe('Optional inline comments on specific lines of code'),
       }),
-      execute: async ({ prNumber, body, event }: { prNumber: number; body: string; event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' }) => {
+      execute: async ({ prNumber, body, event, comments }: {
+        prNumber: number;
+        body: string;
+        event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+        comments?: Array<{ path: string; line: number; body: string }>;
+      }) => {
         try {
           const { data } = await octokit.pulls.createReview({
             owner: repoOwner,
@@ -262,12 +272,18 @@ export function createGitHubTools(repoOwner: string, repoName: string) {
             pull_number: prNumber,
             body,
             event,
+            comments: comments?.map(c => ({
+              path: c.path,
+              line: c.line,
+              body: c.body,
+            })),
           });
 
           return {
             success: true,
             reviewId: data.id,
             state: data.state,
+            commentsCount: comments?.length || 0,
           };
         } catch (error) {
           return {

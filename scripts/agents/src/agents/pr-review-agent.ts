@@ -70,7 +70,7 @@ Your workflow:
 4. Analyze both the full file contents AND the diffs (patches)
 5. ${input.suggestTests ? 'Check test coverage if local tools available, otherwise suggest tests based on file patterns' : 'Note any missing tests'}
 6. Analyze code for issues in: ${focusAreasStr}
-7. Submit a review with your findings using createReview
+7. Submit a review with your findings using createReview WITH inline comments
 
 CRITICAL: When calling getFileContents, you MUST use the headSha commit SHA from getPullRequest as the ref parameter.
 NEVER use the branch name as ref - branches can be deleted after PRs are merged.
@@ -79,6 +79,23 @@ Example: getFileContents({ path: "...", ref: pr.headSha })
 IMPORTANT: Use GitHub API tools (getFileContents, getPullRequestFiles) to read code.
 These work without a local checkout and are safe for reviewing all PRs including forks.
 
+INLINE COMMENTS:
+When you find specific issues in the code, create inline comments using the comments array in createReview:
+- Use the line number from the DIFF (not the absolute file line number)
+- Each comment should reference a specific line in a specific file
+- Be specific about what's wrong and how to fix it
+- Example format:
+  createReview({
+    prNumber: 123,
+    body: "Found 3 issues that need attention",
+    event: "REQUEST_CHANGES",
+    comments: [
+      { path: "src/auth.ts", line: 15, body: "Security issue: This function is vulnerable to SQL injection. Use parameterized queries instead." },
+      { path: "src/auth.ts", line: 42, body: "Missing error handling: Add try-catch to handle potential database errors." },
+      { path: "tests/auth.test.ts", line: 5, body: "Test coverage: Add tests for the error cases." }
+    ]
+  })
+
 REVIEW GUIDELINES:
 - Be constructive, not harsh
 - Explain WHY something is an issue
@@ -86,6 +103,8 @@ REVIEW GUIDELINES:
 - Prioritize issues by severity
 - Consider the context and purpose of the changes
 - Acknowledge good patterns and improvements
+- Leave inline comments for specific code issues
+- Use the summary (body) for overall assessment
 
 SEVERITY LEVELS:
 - critical: Security vulnerabilities, data loss risks, breaking changes
@@ -124,8 +143,20 @@ Steps:
    - Performance concerns
    - Code quality and style
 5. ${input.suggestTests !== false ? 'Suggest test files based on the changed files (e.g., src/foo.ts should have tests/foo.test.ts)' : 'Note any missing test coverage'}
-6. Compile your findings into a comprehensive review
-7. Use createReview to submit with verdict: APPROVE (no issues), REQUEST_CHANGES (critical/high issues), or COMMENT (minor suggestions)
+6. For EACH specific issue you find, note:
+   - The file path
+   - The line number in the DIFF where the issue occurs
+   - What the issue is and how to fix it
+7. Use createReview to submit your review with:
+   - body: Overall summary of your findings
+   - event: APPROVE (no issues), REQUEST_CHANGES (critical/high issues), or COMMENT (minor suggestions)
+   - comments: Array of inline comments for each specific issue found
+     Example: [
+       { path: "src/auth.ts", line: 15, body: "SQL injection vulnerability. Use parameterized queries." },
+       { path: "src/utils.ts", line: 8, body: "Missing null check. Add validation for input parameter." }
+     ]
+
+IMPORTANT: Always include inline comments when you find specific issues. Don't just mention issues in the summary - point to the exact lines!
 
 Use GitHub API tools for file access - they work without local checkout.`;
   }
