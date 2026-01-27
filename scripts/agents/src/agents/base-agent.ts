@@ -155,13 +155,16 @@ export abstract class BaseAgent<TInput, TOutput> {
         lastError = error as Error;
         const errorMessage = error instanceof Error ? error.message : String(error);
 
-        // Check if it's an API limit/rate limit error
+        // Check if it's an API limit/rate limit/balance error that should trigger fallback
         const isRateLimitError =
           errorMessage.includes('rate limit') ||
           errorMessage.includes('quota') ||
           errorMessage.includes('429') ||
+          errorMessage.includes('402') ||
           errorMessage.includes('too many requests') ||
-          errorMessage.includes('resource exhausted');
+          errorMessage.includes('resource exhausted') ||
+          errorMessage.includes('Insufficient Balance') ||
+          errorMessage.includes('insufficient_quota');
 
         if (isRateLimitError && router.hasMoreProviders() && attempt < maxRetries - 1) {
           this.log('warn', `API limit hit with ${router.getCurrentProviderName()}, switching to next provider`, { error: errorMessage });
