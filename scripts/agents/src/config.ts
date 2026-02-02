@@ -22,6 +22,10 @@ export interface AgentConfig {
   deepseekApiKey?: string;
   openrouterApiKey?: string;
 
+  // GitHub Models (uses GITHUB_TOKEN for authentication)
+  useGitHubModels?: boolean;
+  githubModelsModel?: string;
+
   // GitHub
   githubToken: string;
   repoOwner: string;
@@ -46,9 +50,14 @@ export function getConfig(): AgentConfig {
   const openrouterApiKey = process.env.OPENROUTER_API_KEY;
   const githubToken = process.env.GITHUB_TOKEN;
 
-  // Require at least one AI provider API key
-  if (!googleApiKey && !groqApiKey && !openaiApiKey && !anthropicApiKey && !mistralApiKey && !perplexityApiKey && !deepseekApiKey && !openrouterApiKey) {
-    throw new Error('At least one AI provider API key is required (GOOGLE_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, MISTRAL_API_KEY, PERPLEXITY_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY)');
+  // GitHub Models: enabled by default, uses GITHUB_TOKEN for auth (set USE_GITHUB_MODELS=false to disable)
+  // Note: Claude models are NOT available on GitHub Models - use OpenAI, Meta, Mistral, or DeepSeek models
+  const useGitHubModels = process.env.USE_GITHUB_MODELS !== 'false';
+  const githubModelsModel = process.env.GITHUB_MODELS_MODEL || 'openai/gpt-4o';
+
+  // Require at least one AI provider (GitHub Models enabled by default, or an API key)
+  if (!useGitHubModels && !googleApiKey && !groqApiKey && !openaiApiKey && !anthropicApiKey && !mistralApiKey && !perplexityApiKey && !deepseekApiKey && !openrouterApiKey) {
+    throw new Error('At least one AI provider is required. GitHub Models is enabled by default (using GITHUB_TOKEN). To use other providers, set an API key (GOOGLE_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, MISTRAL_API_KEY, PERPLEXITY_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY)');
   }
 
   if (!githubToken) {
@@ -80,6 +89,8 @@ export function getConfig(): AgentConfig {
     perplexityApiKey,
     deepseekApiKey,
     openrouterApiKey,
+    useGitHubModels,
+    githubModelsModel,
     githubToken,
     repoOwner,
     repoName,

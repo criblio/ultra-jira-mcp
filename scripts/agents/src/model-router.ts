@@ -7,7 +7,39 @@ import { createMistral } from '@ai-sdk/mistral';
 import { createPerplexity } from '@ai-sdk/perplexity';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { getConfig } from './config.js';
+
+// GitHub Models API endpoint
+const GITHUB_MODELS_BASE_URL = 'https://models.github.ai/inference';
+
+// GitHub Models provider - uses OpenAI-compatible API at models.github.ai
+function createGitHubModels(githubToken: string) {
+  return createOpenAICompatible({
+    baseURL: GITHUB_MODELS_BASE_URL,
+    apiKey: githubToken,
+    name: 'github-models',
+  });
+}
+
+/**
+ * Get a list of available GitHub Models model IDs
+ * See: https://github.com/marketplace/models
+ */
+export const GITHUB_MODELS_CATALOG = {
+  // OpenAI models
+  'openai/gpt-4o': 'General purpose, multimodal',
+  'openai/gpt-4.1': 'Latest OpenAI, superior coding',
+  'openai/gpt-4.1-mini': 'Balanced performance/cost',
+  'openai/gpt-4.1-nano': 'Fastest, lowest cost',
+  // Meta models
+  'meta/llama-3.3-70b-instruct': 'Open source, high quality',
+  'meta/llama-4-scout-17b-16e-instruct': '10M token context',
+  // Mistral models
+  'mistral-ai/codestral-2501': 'Specialized code generation',
+  // DeepSeek models
+  'deepseek/deepseek-r1': 'Reasoning tasks',
+} as const;
 
 export interface ModelProvider {
   name: string;
@@ -18,7 +50,8 @@ export interface ModelProvider {
 /**
  * Model Router - Automatically falls back to different providers when API limits are hit
  *
- * Priority order: Free tiers first, then paid options
+ * Priority order: GitHub Models first (default), then free tiers, then paid options
+ * - GitHub Models (default, uses GITHUB_TOKEN - no extra API key needed)
  * - Groq (generous free tier, fast inference)
  * - Google Gemini (generous free tier, flash models)
  * - OpenRouter (free tier for select models)
@@ -39,8 +72,25 @@ export class ModelRouter {
   private initializeProviders(): void {
     const config = getConfig();
 
-    // Priority order: free tiers first, then paid options
+    // Priority order: GitHub Models first (default), then free tiers, then paid options
     const providerConfigs: ModelProvider[] = [
+      // 0. GitHub Models - Default provider, uses GITHUB_TOKEN for auth (no additional API key needed)
+      // Note: Claude models are NOT available - use OpenAI, Meta, Mistral, xAI, or DeepSeek models
+      {
+        name: 'github-models',
+        priority: 0,
+        createModel: () => {
+          if (!config.useGitHubModels || !config.githubToken) return null;
+          try {
+            const githubModels = createGitHubModels(config.githubToken);
+            // Default to GPT-4o, can be overridden via GITHUB_MODELS_MODEL env var
+            return githubModels(config.githubModelsModel || 'openai/gpt-4o');
+          } catch {
+            return null;
+          }
+        },
+      },
+
       // 1. Groq - Very fast inference, generous free tier
       {
         name: 'groq',
