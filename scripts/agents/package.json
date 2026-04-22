@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "ai": "^6.0.162",
-    "@ai-sdk/google": "^3.0.63",
+    "@ai-sdk/google": "^3.0.64",
     "@ai-sdk/groq": "^3.0.35",
     "@ai-sdk/deepseek": "^2.0.29",
     "@ai-sdk/openai": "^3.0.53",
