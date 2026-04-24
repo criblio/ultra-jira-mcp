@@ -19,6 +19,7 @@
 // possible here because the attachment's stable identifier is its
 // Jira ID, not its bytes.
 
+import { randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -105,7 +106,21 @@ export function sanitizeFilename(name: string): string {
 
 // --- Directory layout --------------------------------------------------
 
+// Jira issue keys are of the form `PROJECT-123` — uppercase project
+// key (letters, digits, underscore; must start with a letter) + hyphen
+// + numeric id. Anything else is rejected rather than being used as a
+// path segment, since path.join() happily resolves `..` and would
+// escape the session cache dir.
+const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*-[0-9]+$/;
+
+export function assertValidIssueKey(key: string): void {
+  if (!ISSUE_KEY_PATTERN.test(key)) {
+    throw new Error(`Invalid Jira issue key: ${JSON.stringify(key)}`);
+  }
+}
+
 function attachmentDir(issueKey: string): string {
+  assertValidIssueKey(issueKey);
   return path.join(sessionCacheDir(), "issues", issueKey, "attachments");
 }
 
@@ -116,12 +131,31 @@ const defaultTransport: AttachmentTransport = async (url, init) => {
     method: init.method,
     headers: init.headers,
   });
+  // The response body is a single-consumption stream. Callers that
+  // read it as `body` (for streaming to disk) must not then also call
+  // `bodyText`, and vice versa. Today's callers respect this (success
+  // path only reads `body`, error path only reads `bodyText`), but
+  // this guard makes accidental double-consumption fail loudly rather
+  // than quietly returning garbage if a future caller forgets.
+  let consumed: "none" | "stream" | "text" = "none";
   return {
     statusCode: res.statusCode,
-    // undici's body is already a Node Readable when the response is
-    // consumed as a stream.
-    body: Readable.from(res.body),
-    bodyText: () => res.body.text(),
+    get body(): Readable {
+      if (consumed === "text") {
+        throw new Error("Response body already consumed via bodyText()");
+      }
+      consumed = "stream";
+      return Readable.from(res.body);
+    },
+    bodyText: () => {
+      if (consumed === "stream") {
+        return Promise.reject(
+          new Error("Response body already consumed via stream"),
+        );
+      }
+      consumed = "text";
+      return res.body.text();
+    },
   };
 };
 
@@ -135,13 +169,32 @@ async function extractPreview(
   maxChars: number,
 ): Promise<string | null> {
   if (!TEXT_MIME_PATTERN.test(mimeType)) return null;
+  // Only read the prefix of the file rather than buffering the whole
+  // thing — a multi-MB log/JSON attachment would otherwise allocate
+  // (buffer + UTF-8 string) proportional to its size even though we
+  // only return maxChars of it.
+  //
+  // Worst-case UTF-8 is 4 bytes per char, plus one extra codepoint of
+  // slack so we can detect whether the file extends beyond the limit.
+  const readBytes = maxChars * 4 + 4;
+  let fh;
   try {
-    const buf = await fs.readFile(filePath);
-    const text = buf.toString("utf8");
-    if (text.length <= maxChars) return text;
+    fh = await fs.open(filePath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const buf = Buffer.allocUnsafe(readBytes);
+    const { bytesRead } = await fh.read(buf, 0, readBytes, 0);
+    const slice = buf.subarray(0, bytesRead);
+    const truncatedRead = bytesRead === readBytes;
+    const text = slice.toString("utf8");
+    if (!truncatedRead && text.length <= maxChars) return text;
     return `${text.slice(0, maxChars)}…`;
   } catch {
     return null;
+  } finally {
+    await fh.close().catch(() => undefined);
   }
 }
 
@@ -191,7 +244,12 @@ export async function downloadAttachment(
   // Stream to disk. Writing to a temp file and renaming keeps the
   // idempotency check honest: a partial file from an interrupted
   // download won't pass the size check on the next call.
-  const tempPath = `${targetPath}.${process.pid}.partial`;
+  //
+  // The suffix includes random bytes so that two concurrent downloads
+  // of the same attachment within a single process (MCP servers
+  // receive concurrent tool calls) don't both pipe into the same temp
+  // file and corrupt each other.
+  const tempPath = `${targetPath}.${process.pid}.${randomBytes(6).toString("hex")}.partial`;
   try {
     await pipeline(res.body, createWriteStream(tempPath));
     await fs.rename(tempPath, targetPath);
