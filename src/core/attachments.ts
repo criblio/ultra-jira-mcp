@@ -126,26 +126,35 @@ function attachmentDir(issueKey: string): string {
 
 // --- Default transport -------------------------------------------------
 
-const defaultTransport: AttachmentTransport = async (url, init) => {
-  const res = await undiciRequest(url, {
-    method: init.method,
-    headers: init.headers,
-  });
-  // The response body is a single-consumption stream. Callers that
-  // read it as `body` (for streaming to disk) must not then also call
-  // `bodyText`, and vice versa. Today's callers respect this (success
-  // path only reads `body`, error path only reads `bodyText`), but
-  // this guard makes accidental double-consumption fail loudly rather
-  // than quietly returning garbage if a future caller forgets.
+// The response body is a single-consumption stream. Callers that read
+// it as `body` (for streaming to disk) must not then also call
+// `bodyText`, and vice versa — and neither can be consumed twice.
+// Today's callers respect this (success path only reads `body`, error
+// path only reads `bodyText`), but this guard makes accidental
+// double-consumption fail loudly rather than quietly returning garbage
+// if a future caller forgets.
+//
+// Exported so the unit test can exercise the real guard rather than
+// reimplementing it against a mock.
+export function guardSingleConsumption(
+  statusCode: number,
+  underlying: {
+    stream: () => Readable;
+    text: () => Promise<string>;
+  },
+): AttachmentHttpResponse {
   let consumed: "none" | "stream" | "text" = "none";
   return {
-    statusCode: res.statusCode,
+    statusCode,
     get body(): Readable {
       if (consumed === "text") {
         throw new Error("Response body already consumed via bodyText()");
       }
+      if (consumed === "stream") {
+        throw new Error("Response body already consumed via body getter");
+      }
       consumed = "stream";
-      return Readable.from(res.body);
+      return underlying.stream();
     },
     bodyText: () => {
       if (consumed === "stream") {
@@ -153,10 +162,26 @@ const defaultTransport: AttachmentTransport = async (url, init) => {
           new Error("Response body already consumed via stream"),
         );
       }
+      if (consumed === "text") {
+        return Promise.reject(
+          new Error("Response body already consumed via bodyText()"),
+        );
+      }
       consumed = "text";
-      return res.body.text();
+      return underlying.text();
     },
   };
+}
+
+const defaultTransport: AttachmentTransport = async (url, init) => {
+  const res = await undiciRequest(url, {
+    method: init.method,
+    headers: init.headers,
+  });
+  return guardSingleConsumption(res.statusCode, {
+    stream: () => Readable.from(res.body),
+    text: () => res.body.text(),
+  });
 };
 
 // --- Preview extraction ------------------------------------------------

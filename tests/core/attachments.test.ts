@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertValidIssueKey,
   downloadAttachment,
+  guardSingleConsumption,
   sanitizeFilename,
   type AttachmentHttpResponse,
   type AttachmentInput,
@@ -411,44 +412,65 @@ describe("downloadAttachment — preview is memory-bounded", () => {
   });
 });
 
-// --- defaultTransport dual-read guard ---------------------------------
+// --- guardSingleConsumption -------------------------------------------
 
-describe("defaultTransport dual-read guard", () => {
-  // We import the transport indirectly: a small wrapper replicates the
-  // guard logic against a fake undici-shaped object so the test isn't
-  // coupled to network behavior. The assertion is that the shape used
-  // by downloadAttachment throws when both body and bodyText are read.
-  //
-  // This is a focused unit test of the guard; the broader contract
-  // (success path reads body only, error path reads bodyText only) is
-  // already covered by the error/happy-path tests above.
-  it("throws when stream body is consumed then bodyText is called", async () => {
-    // Build an AttachmentHttpResponse that matches the guard shape.
-    // (We mirror defaultTransport's structure locally.)
-    let consumed: "none" | "stream" | "text" = "none";
-    const res: AttachmentHttpResponse = {
-      statusCode: 200,
-      get body() {
-        if (consumed === "text") throw new Error("body already consumed via bodyText");
-        consumed = "stream";
-        return Readable.from([Buffer.from("x")]);
+describe("guardSingleConsumption", () => {
+  // Factory so each test starts with a fresh guard state. `stream` and
+  // `text` both track their own call counts so we can assert that the
+  // underlying consumers aren't invoked after a guard rejection.
+  const make = () => {
+    let streamCalls = 0;
+    let textCalls = 0;
+    const res = guardSingleConsumption(200, {
+      stream: () => {
+        streamCalls++;
+        return Readable.from([Buffer.from("payload")]);
       },
-      bodyText: () => {
-        if (consumed === "stream") {
-          return Promise.reject(new Error("body already consumed via stream"));
-        }
-        consumed = "text";
-        return Promise.resolve("x");
+      text: () => {
+        textCalls++;
+        return Promise.resolve("payload");
       },
-    };
+    });
+    return { res, get streamCalls() { return streamCalls; }, get textCalls() { return textCalls; } };
+  };
 
-    // Consume as stream first.
-    const stream = res.body;
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
-    stream.on("data", () => {});
-    await new Promise<void>((r) => stream.on("end", () => r()));
+  it("allows a single body read", () => {
+    const ctx = make();
+    expect(() => ctx.res.body).not.toThrow();
+    expect(ctx.streamCalls).toBe(1);
+  });
 
-    // Now attempting bodyText must reject.
-    await expect(res.bodyText()).rejects.toThrow(/already consumed/);
+  it("allows a single bodyText read", async () => {
+    const ctx = make();
+    await expect(ctx.res.bodyText()).resolves.toBe("payload");
+    expect(ctx.textCalls).toBe(1);
+  });
+
+  it("throws on stream → bodyText", async () => {
+    const ctx = make();
+    void ctx.res.body; // consume
+    await expect(ctx.res.bodyText()).rejects.toThrow(/already consumed via stream/);
+    expect(ctx.textCalls).toBe(0);
+  });
+
+  it("throws on bodyText → stream", async () => {
+    const ctx = make();
+    await ctx.res.bodyText();
+    expect(() => ctx.res.body).toThrow(/already consumed via bodyText/);
+    expect(ctx.streamCalls).toBe(0);
+  });
+
+  it("throws on body → body (double stream-consume)", () => {
+    const ctx = make();
+    void ctx.res.body;
+    expect(() => ctx.res.body).toThrow(/already consumed via body getter/);
+    expect(ctx.streamCalls).toBe(1);
+  });
+
+  it("throws on bodyText → bodyText (double text-consume)", async () => {
+    const ctx = make();
+    await ctx.res.bodyText();
+    await expect(ctx.res.bodyText()).rejects.toThrow(/already consumed via bodyText/);
+    expect(ctx.textCalls).toBe(1);
   });
 });
