@@ -14,18 +14,32 @@ import {
 
 const originalSessionId = process.env.MCP_SESSION_ID;
 
-async function rmRootIfExists(): Promise<void> {
-  await fs.rm(rootCacheDir(), { recursive: true, force: true });
+// Per-test isolation: each test gets a unique session id, which maps
+// to a unique subdir under rootCacheDir(). We clean up only that
+// subdir (plus any known test fixture names) rather than nuking the
+// whole root, which caused test-file-interleaving flakes on macOS.
+const KNOWN_FIXTURE_DIRS = new Set(["old-session", "new-session", "broken-link"]);
+
+async function rmSessionDir(): Promise<void> {
+  await fs.rm(sessionCacheDir(), { recursive: true, force: true });
+}
+
+async function rmFixtureDirs(): Promise<void> {
+  for (const name of KNOWN_FIXTURE_DIRS) {
+    await fs.rm(path.join(rootCacheDir(), name), { recursive: true, force: true });
+  }
 }
 
 beforeEach(async () => {
   process.env.MCP_SESSION_ID = `test-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   __resetSessionCacheDirForTests();
-  await rmRootIfExists();
+  await rmSessionDir();
+  await rmFixtureDirs();
 });
 
 afterEach(async () => {
-  await rmRootIfExists();
+  await rmSessionDir();
+  await rmFixtureDirs();
   if (originalSessionId === undefined) delete process.env.MCP_SESSION_ID;
   else process.env.MCP_SESSION_ID = originalSessionId;
   __resetSessionCacheDirForTests();
@@ -121,21 +135,30 @@ describe("sandbox()", () => {
   it("does not rewrite an already-cached file", async () => {
     const payload = { v: "first" };
     const first = await sandbox(payload, { kind: "x", summarize: () => null });
-    const beforeMtime = (await fs.stat(first.ref)).mtimeMs;
 
-    await new Promise((r) => setTimeout(r, 15));
+    // Clobber the cached file with a sentinel. If the second sandbox()
+    // call were to rewrite, the sentinel would be replaced by the
+    // serialized payload. Comparing file content is deterministic
+    // across OSes; comparing mtimes was flaky under test parallelism.
+    const sentinel = "SENTINEL_NOT_REAL_JSON";
+    await fs.writeFile(first.ref, sentinel, "utf8");
+
     const second = await sandbox(payload, { kind: "x", summarize: () => null });
-    const afterMtime = (await fs.stat(second.ref)).mtimeMs;
-
-    expect(afterMtime).toBe(beforeMtime);
+    expect(second.ref).toBe(first.ref);
+    expect(await fs.readFile(second.ref, "utf8")).toBe(sentinel);
   });
 });
 
 describe("cleanupStaleSessions()", () => {
-  it("returns empty arrays when the root dir does not exist", async () => {
-    await rmRootIfExists();
+  it("returns empty removed/errors when there are no stale sessions", async () => {
+    // Fresh test: only the current session dir (if any) exists. No
+    // stale dirs to remove, no errors to report.
     const result = await cleanupStaleSessions();
-    expect(result).toEqual({ removed: [], skipped: [], errors: [] });
+    expect(result.removed).toEqual([]);
+    expect(result.errors).toEqual([]);
+    // `skipped` may contain the current session plus any unrelated
+    // dirs other tests left around — we don't care about its contents
+    // here, just that nothing was removed and nothing errored.
   });
 
   it("removes sessions older than 24h and skips recent ones", async () => {

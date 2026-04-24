@@ -1,3 +1,6 @@
+import { httpRequest } from "../core/http.js";
+import { TtlLruCache } from "../core/lru.js";
+import { readTenantCache, writeTenantCache } from "../core/tenant-cache.js";
 import { JiraConfig } from "../config.js";
 
 export interface JiraRequestOptions {
@@ -22,10 +25,28 @@ export class JiraApiError extends Error {
   }
 }
 
+// Metadata endpoints whose responses rarely change within a session.
+// GET requests to these paths are served from an in-memory LRU for the
+// TTL. Everything else bypasses the cache.
+const METADATA_PATHS = new Set([
+  "/field",
+  "/issuetype",
+  "/priority",
+  "/status",
+  "/resolution",
+]);
+
+const METADATA_TTL_MS = 5 * 60 * 1000;
+const METADATA_MAX_SIZE = 64;
+
 export class JiraClient {
   private config: JiraConfig;
   private cloudId: string | null = null;
   private initPromise: Promise<void> | null = null;
+  private readonly metadataCache = new TtlLruCache<string, unknown>({
+    maxSize: METADATA_MAX_SIZE,
+    ttlMs: METADATA_TTL_MS,
+  });
 
   constructor(config: JiraConfig) {
     this.config = config;
@@ -50,49 +71,72 @@ export class JiraClient {
       return;
     }
 
-    // Prevent multiple parallel initializations
+    // Prevent multiple parallel initializations. On rejection, clear
+    // the promise so the next call can retry — otherwise a transient
+    // init failure (network blip, 5xx on tenant_info) would leave the
+    // client permanently broken.
     if (this.initPromise) {
       return this.initPromise;
     }
 
-    this.initPromise = this.fetchCloudId();
+    this.initPromise = this.fetchCloudId().catch((err) => {
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
   /**
-   * Fetch the cloudId from the tenant_info endpoint
-   * This works for both scoped tokens and classic tokens
+   * Fetch the cloudId from the tenant_info endpoint, preferring a
+   * cached value on disk (24h TTL) to avoid the network hop on warm
+   * starts. Works for both scoped tokens and classic tokens.
    */
   private async fetchCloudId(): Promise<void> {
-    // Get cloudId from the tenant_info endpoint
-    // URL: https://<site>.atlassian.net/_edge/tenant_info
-    const tenantInfoUrl = `${this.config.host}/_edge/tenant_info`;
+    // Disk cache first.
+    try {
+      const cached = await readTenantCache(this.config.host);
+      if (cached) {
+        this.cloudId = cached;
+        return;
+      }
+    } catch {
+      // Cache read failure is non-fatal — fall through to the network.
+    }
 
-    const response = await fetch(tenantInfoUrl, {
+    const tenantInfoUrl = `${this.config.host}/_edge/tenant_info`;
+    const response = await httpRequest(tenantInfoUrl, {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { Accept: "application/json" },
     });
 
-    if (!response.ok) {
-      const text = await response.text();
+    const text = await response.text();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       throw new JiraApiError(
         `Failed to fetch tenant info from ${tenantInfoUrl}: ${text}`,
-        response.status
+        response.statusCode
       );
     }
 
-    const tenantInfo: { cloudId: string } = await response.json();
+    let tenantInfo: { cloudId?: string };
+    try {
+      tenantInfo = JSON.parse(text);
+    } catch {
+      throw new JiraApiError(
+        `Invalid JSON from ${tenantInfoUrl}: ${text.slice(0, 200)}`,
+        response.statusCode
+      );
+    }
 
     if (!tenantInfo.cloudId) {
-      throw new JiraApiError(
-        "No cloudId found in tenant info response",
-        500
-      );
+      throw new JiraApiError("No cloudId found in tenant info response", 500);
     }
 
     this.cloudId = tenantInfo.cloudId;
+    try {
+      await writeTenantCache(this.config.host, tenantInfo.cloudId);
+    } catch {
+      // Cache write failure is non-fatal.
+    }
   }
 
   /**
@@ -144,6 +188,24 @@ export class JiraClient {
     return `Basic ${credentials}`;
   }
 
+  private metadataCacheKey(
+    path: string,
+    queryParams?: Record<string, string | number | boolean | undefined>,
+    isAgile?: boolean,
+  ): string | null {
+    if (isAgile) return null;
+    if (!METADATA_PATHS.has(path)) return null;
+    // Include queryParams in the key so different paginations don't collide.
+    const qs = queryParams
+      ? JSON.stringify(
+          Object.entries(queryParams)
+            .filter(([, v]) => v !== undefined)
+            .sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : "";
+    return `${path}?${qs}`;
+  }
+
   private async request<T>(
     path: string,
     options: JiraRequestOptions = {},
@@ -153,39 +215,33 @@ export class JiraClient {
     await this.ensureInitialized();
 
     const { method = "GET", body, queryParams } = options;
+
+    // Serve metadata GETs from the in-memory LRU if possible.
+    const cacheKey =
+      method === "GET" ? this.metadataCacheKey(path, queryParams, isAgile) : null;
+    if (cacheKey) {
+      const hit = this.metadataCache.get(cacheKey);
+      if (hit !== undefined) return hit as T;
+    }
+
     const url = this.buildUrl(path, queryParams, isAgile);
 
     const headers: Record<string, string> = {
       Authorization: this.getAuthHeader(),
       Accept: "application/json",
     };
-
     if (body) {
       headers["Content-Type"] = "application/json";
     }
 
-    const fetchOptions: RequestInit = {
+    const response = await httpRequest(url, {
       method,
       headers,
-    };
-
-    if (body) {
-      fetchOptions.body = JSON.stringify(body);
-    }
-
-    const response = await fetch(url, fetchOptions);
-
-    // Handle rate limiting
-    if (response.status === 429) {
-      const retryAfter = response.headers.get("Retry-After");
-      throw new JiraApiError(
-        `Rate limited. Retry after ${retryAfter || "unknown"} seconds`,
-        429
-      );
-    }
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
 
     // Handle no content responses
-    if (response.status === 204) {
+    if (response.statusCode === 204) {
       return {} as T;
     }
 
@@ -205,8 +261,8 @@ export class JiraClient {
       }
     }
 
-    if (!response.ok) {
-      // Handle error response
+    const ok = response.statusCode >= 200 && response.statusCode < 300;
+    if (!ok) {
       let errorMessage: string;
 
       if (data && typeof data === "object") {
@@ -214,12 +270,11 @@ export class JiraClient {
         errorMessage =
           errorData.errorMessages?.join(", ") ||
           Object.values(errorData.errors || {}).join(", ") ||
-          `HTTP ${response.status}`;
-        throw new JiraApiError(errorMessage, response.status, errorData);
+          `HTTP ${response.statusCode}`;
+        throw new JiraApiError(errorMessage, response.statusCode, errorData);
       } else {
-        // Plain text error response
-        errorMessage = responseText || `HTTP ${response.status}`;
-        throw new JiraApiError(errorMessage, response.status, {
+        errorMessage = responseText || `HTTP ${response.statusCode}`;
+        throw new JiraApiError(errorMessage, response.statusCode, {
           errorMessages: [errorMessage],
         });
       }
@@ -231,7 +286,9 @@ export class JiraClient {
       return responseText as unknown as T;
     }
 
-    return (data ?? {}) as T;
+    const result = (data ?? {}) as T;
+    if (cacheKey) this.metadataCache.set(cacheKey, result);
+    return result;
   }
 
   // Platform API (REST API v3)
