@@ -52,6 +52,32 @@ describe("sessionCacheDir", () => {
     process.env.MCP_SESSION_ID = "different";
     expect(sessionCacheDir()).toBe(first);
   });
+
+  it.each([
+    ["path traversal", "../etc/passwd"],
+    ["slash", "foo/bar"],
+    ["backslash", "foo\\bar"],
+    ["empty after trim", "   "],
+    ["too long", "a".repeat(200)],
+  ])("falls back to pid when MCP_SESSION_ID is invalid (%s)", (_label, val) => {
+    process.env.MCP_SESSION_ID = val;
+    __resetSessionCacheDirForTests();
+    expect(sessionCacheDir()).toBe(
+      path.join(os.tmpdir(), "jira-mcp", String(process.pid)),
+    );
+  });
+
+  it.each([
+    "abc123",
+    "session-with-hyphens",
+    "session_with_underscores",
+    "session.with.dots",
+    "MixedCase123",
+  ])("accepts safe id %s", (val) => {
+    process.env.MCP_SESSION_ID = val;
+    __resetSessionCacheDirForTests();
+    expect(sessionCacheDir()).toBe(path.join(os.tmpdir(), "jira-mcp", val));
+  });
 });
 
 describe("sandbox()", () => {
@@ -109,7 +135,7 @@ describe("cleanupStaleSessions()", () => {
   it("returns empty arrays when the root dir does not exist", async () => {
     await rmRootIfExists();
     const result = await cleanupStaleSessions();
-    expect(result).toEqual({ removed: [], skipped: [] });
+    expect(result).toEqual({ removed: [], skipped: [], errors: [] });
   });
 
   it("removes sessions older than 24h and skips recent ones", async () => {
@@ -145,5 +171,23 @@ describe("cleanupStaleSessions()", () => {
     expect(result.removed).not.toContain(path.basename(current));
     expect(result.skipped).toContain(path.basename(current));
     await expect(fs.stat(current)).resolves.toBeDefined();
+  });
+
+  it("captures per-entry errors separately from skipped/removed", async () => {
+    const root = rootCacheDir();
+    await fs.mkdir(root, { recursive: true });
+
+    // A broken symlink: readdir sees the entry, but fs.stat fails with
+    // ENOENT. This works cross-platform and doesn't require chmod games.
+    await fs.symlink(
+      path.join(root, "does-not-exist"),
+      path.join(root, "broken-link"),
+    );
+
+    const result = await cleanupStaleSessions();
+    expect(result.errors.map((e) => e.session)).toContain("broken-link");
+    expect(result.errors[0]?.message).toMatch(/ENOENT|no such file/i);
+    expect(result.removed).not.toContain("broken-link");
+    expect(result.skipped).not.toContain("broken-link");
   });
 });
