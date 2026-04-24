@@ -188,6 +188,16 @@ export class JiraClient {
     return `Basic ${credentials}`;
   }
 
+  /**
+   * Public accessor for the auth header. Used by side-channel clients
+   * (attachment downloader) that need to make authenticated requests
+   * outside the main request pipeline. Callers are trusted — never
+   * expose this value to a response payload or log.
+   */
+  getAuthorizationHeader(): string {
+    return this.getAuthHeader();
+  }
+
   private metadataCacheKey(
     path: string,
     queryParams?: Record<string, string | number | boolean | undefined>,
