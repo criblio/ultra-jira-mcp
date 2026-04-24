@@ -3,6 +3,11 @@ name: PR Review Agent
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+    # Skip PRs targeting the v2 integration branch — the v2 rewrite is
+    # tracked as a series of internal PRs that merge into v2, and only
+    # the final v2 -> main PR needs agent review.
+    branches-ignore:
+      - v2
     paths-ignore:
       - '.github/workflows/**'
       - '**.md'
