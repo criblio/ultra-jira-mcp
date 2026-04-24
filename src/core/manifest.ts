@@ -112,7 +112,12 @@ export function splitArgs(
   for (const spec of op.params) {
     known.add(spec.name);
     const raw = args[spec.name];
-    if (raw === undefined) {
+    // Treat explicit null the same as undefined: it can't satisfy a
+    // required param, and it'd be wrong to forward as a path segment
+    // or JSON body value. Falling through would produce a plain Error
+    // from interpolatePath instead of the OperationError callers
+    // expect.
+    if (raw === undefined || raw === null) {
       if (spec.required) missingRequired.push(spec.name);
       continue;
     }

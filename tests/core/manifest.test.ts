@@ -150,6 +150,17 @@ describe("splitArgs", () => {
     const op = makeOp([{ name: "fields", role: "query" }]);
     expect(splitArgs(op, { fields: undefined }).queryParams).toEqual({});
   });
+
+  it("treats explicit null the same as undefined for required-param detection", () => {
+    const op = makeOp([
+      { name: "key", role: "path", required: true },
+      { name: "fields", role: "query" },
+    ]);
+    const s = splitArgs(op, { key: null, fields: null });
+    expect(s.missingRequired).toEqual(["key"]);
+    expect(s.pathParams).toEqual({});
+    expect(s.queryParams).toEqual({});
+  });
 });
 
 // --- invokeOperation ---------------------------------------------------
@@ -203,6 +214,17 @@ describe("invokeOperation", () => {
     await expect(
       invokeOperation(manifest, client, "issue.create", {}),
     ).rejects.toThrow(/Missing required param.*fields/);
+  });
+
+  it("throws OperationError (not plain Error) when a required param is explicit null", async () => {
+    const { client } = makeMockClient();
+    // Regression test for PR #172 review: previously null bypassed
+    // splitArgs' required-check and bubbled through to
+    // interpolatePath as a plain Error, breaking `instanceof OperationError`
+    // handling at the caller.
+    await expect(
+      invokeOperation(manifest, client, "issue.get", { key: null }),
+    ).rejects.toBeInstanceOf(OperationError);
   });
 
   it("routes GET with path + query params through JiraClient.get", async () => {
