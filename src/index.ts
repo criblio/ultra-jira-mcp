@@ -9,22 +9,14 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { getConfig, getToolFilterConfig, ToolFilterConfig } from "./config.js";
+import { getConfig } from "./config.js";
 import { JiraClient, JiraApiError } from "./auth/jira-client.js";
-import { getFilteredTools, handleTool } from "./tools/index.js";
-import { v2Tools, handleV2Tool, isV2Tool } from "./tools/v2/index.js";
+import { v2Tools, handleV2Tool } from "./tools/v2/index.js";
 import {
   resourceDefinitions,
   resourceTemplates,
   handleResource,
 } from "./resources/index.js";
-
-// Opt-in flag for the v2 consolidated tools landed in PR #7b. When
-// enabled, the v2 tools are appended to the listing returned to MCP
-// clients and routed through their dispatcher; v1 tools remain
-// untouched. This makes the transition non-breaking while we build
-// out the full v2 surface in PR #7c.
-const v2ToolsEnabled = (process.env.JIRA_V2_TOOLS ?? "").trim() === "1";
 
 // Create the MCP server using the lower-level Server class for more control
 const server = new Server(
@@ -51,32 +43,13 @@ function getClient(): JiraClient {
   return jiraClient;
 }
 
-// Cache tool filter config at startup
-const toolFilterConfig: ToolFilterConfig = getToolFilterConfig();
-const filteredTools = getFilteredTools(toolFilterConfig);
-
-// Log filtering info if any filtering is active
-if (toolFilterConfig.enabledCategories.length > 0) {
-  console.error(
-    `Tool categories enabled: ${toolFilterConfig.enabledCategories.join(", ")}`
-  );
-}
-if (toolFilterConfig.disabledTools.length > 0) {
-  console.error(
-    `Tools disabled: ${toolFilterConfig.disabledTools.join(", ")}`
-  );
-}
-if (filteredTools.length < 50) {
-  // Only log if significantly filtered
-  console.error(`Total tools available: ${filteredTools.length}`);
-}
-
-// Register tools list handler
+// Register tools list handler. v2 ships 16 consolidated tools that
+// replace v1's 85 (one per category, action-discriminated). Filtering
+// by category was useful in v1 because it kept the tool-list token
+// cost down; v2's much smaller surface makes it less necessary, and
+// we can add it back if asked.
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  // When the v2 flag is set, append the consolidated tools to the
-  // listing. v1 and v2 names don't overlap, so concatenation is safe.
-  const tools = v2ToolsEnabled ? [...filteredTools, ...v2Tools] : filteredTools;
-  return { tools };
+  return { tools: v2Tools };
 });
 
 // Register tool call handler
@@ -85,13 +58,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     const client = getClient();
-    // Route v2 tools through their own dispatcher when the flag is on
-    // *and* the name matches one. Falling back to v1 keeps behavior
-    // identical when v2 is off.
-    const result =
-      v2ToolsEnabled && isV2Tool(name)
-        ? await handleV2Tool(client, name, args || {})
-        : await handleTool(client, name, args || {}, toolFilterConfig);
+    const result = await handleV2Tool(client, name, args || {});
 
     return {
       content: [

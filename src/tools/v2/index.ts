@@ -4,9 +4,9 @@
 // `handleV2Tool` is the call dispatcher (called from
 // CallToolRequestSchema's handler in src/index.ts).
 //
-// Coverage in this PR (#7b): jira_issue, jira_search, jira_comment,
-// jira_user. PR #7c adds the remaining 11 categories and removes the
-// v1 tool files.
+// Coverage: 16 consolidated tools collapse the 85 v1 tools into one
+// per category. Every action dispatches through invokeOperation
+// against the manifest in src/core/operations.ts.
 
 import type { JiraClient } from "../../auth/jira-client.js";
 import { operations } from "../../core/operations.js";
@@ -15,16 +15,40 @@ import {
   dispatchTool,
   type ConsolidatedTool,
 } from "./dispatcher.js";
+import { jiraAttachment } from "./attachment.js";
+import { jiraBoard } from "./board.js";
 import { jiraComment } from "./comment.js";
+import { jiraEpic } from "./epic.js";
+import { jiraField } from "./field.js";
+import { jiraFilter } from "./filter.js";
+import { jiraGroup } from "./group.js";
 import { jiraIssue } from "./issue.js";
+import { jiraLink } from "./link.js";
+import { jiraProject } from "./project.js";
 import { jiraSearch } from "./search.js";
+import { jiraServer } from "./server.js";
+import { jiraSprint } from "./sprint.js";
 import { jiraUser } from "./user.js";
+import { jiraWatcher } from "./watcher.js";
+import { jiraWorklog } from "./worklog.js";
 
 const allConsolidatedTools: ConsolidatedTool[] = [
   jiraIssue,
   jiraSearch,
   jiraComment,
   jiraUser,
+  jiraProject,
+  jiraBoard,
+  jiraSprint,
+  jiraEpic,
+  jiraWorklog,
+  jiraAttachment,
+  jiraFilter,
+  jiraLink,
+  jiraWatcher,
+  jiraField,
+  jiraGroup,
+  jiraServer,
 ];
 
 const toolByName = new Map<string, ConsolidatedTool>();
