@@ -199,6 +199,30 @@ const manifest: Manifest = [
     isAgile: true,
     params: [{ name: "boardId", role: "path", required: true }],
   },
+  {
+    name: "watcher.add",
+    description: "",
+    verb: "POST",
+    pathTemplate: "/issue/{key}/watchers",
+    bodyShape: "rawString",
+    params: [
+      { name: "key", role: "path", required: true },
+      { name: "accountId", role: "body", required: true },
+    ],
+  },
+  {
+    name: "broken.rawString",
+    description: "",
+    verb: "POST",
+    pathTemplate: "/x",
+    bodyShape: "rawString",
+    // Two body params — should trigger the dispatcher's rawString
+    // contract violation.
+    params: [
+      { name: "a", role: "body" },
+      { name: "b", role: "body" },
+    ],
+  },
 ];
 
 describe("invokeOperation", () => {
@@ -311,5 +335,31 @@ describe("invokeOperation", () => {
     expect(result.key).toBe("PROJ-1");
     expect(result.status).toBe("To Do");
     expect(result.descriptionPreview).toBe("");
+  });
+
+  it("rawString bodyShape forwards the raw param value, not the wrapping object", async () => {
+    // Regression test for PR #173 review: Jira's POST /issue/{key}/watchers
+    // expects a JSON-encoded string body (e.g. `"acc123"`), not an
+    // object. The dispatcher must hand the raw value to JiraClient.post
+    // so JSON.stringify produces the right wire shape.
+    const ctx = makeMockClient();
+    await invokeOperation(manifest, ctx.client, "watcher.add", {
+      key: "PROJ-1",
+      accountId: "acc123",
+    });
+    expect(ctx.calls).toHaveLength(1);
+    expect(ctx.calls[0]).toMatchObject({
+      api: "post",
+      path: "/issue/PROJ-1/watchers",
+      // Crucially: the literal string, not { accountId: "acc123" }.
+      body: "acc123",
+    });
+  });
+
+  it("rawString bodyShape rejects ops that declare !=1 body param", async () => {
+    const ctx = makeMockClient();
+    await expect(
+      invokeOperation(manifest, ctx.client, "broken.rawString", { a: "x", b: "y" }),
+    ).rejects.toThrow(/rawString.*must be exactly 1/);
   });
 });

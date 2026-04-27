@@ -35,6 +35,20 @@ export interface ParamSpec {
   description?: string;
 }
 
+// How the request body is shaped on the wire.
+//
+//   "object"    (default) — body params are wrapped into a single
+//                JSON object: { paramA: ..., paramB: ... }. This is
+//                what 99% of Jira endpoints expect.
+//   "rawString" — the operation must declare exactly one body param.
+//                That param's value is sent as a raw JSON string body
+//                (e.g. `"acc123"`, with quotes). Required by the
+//                handful of Jira endpoints that take a bare scalar
+//                rather than an object — most notably
+//                POST /issue/{key}/watchers, which expects the
+//                accountId as a JSON-encoded string.
+export type BodyShape = "object" | "rawString";
+
 export interface Operation {
   // Stable identifier — stable across v2 minor versions. Layer 3
   // stubs are named after this (`issue.get` → `api/issues/getIssue.ts`).
@@ -50,6 +64,8 @@ export interface Operation {
   // the existing `isAgile` boolean in JiraClient.
   isAgile?: boolean;
   params: ParamSpec[];
+  // How body params are serialized on the wire. Defaults to "object".
+  bodyShape?: BodyShape;
   // Optional: trim projection applied to the response before returning.
   // Looked up by key in the trim registry; the generator and the
   // dispatcher both resolve it at call time.
@@ -198,6 +214,27 @@ export async function invokeOperation(
     }
   }
 
+  // Reshape the body if the operation uses a non-default shape.
+  // For "rawString", the operation must declare exactly one body
+  // param; we forward its raw value so JiraClient.post (which calls
+  // JSON.stringify on whatever it receives) emits a JSON-encoded
+  // string like `"acc123"` rather than `{"accountId":"acc123"}`.
+  let bodyToSend: unknown = split.body;
+  if (op.bodyShape === "rawString") {
+    const bodyParamSpecs = op.params.filter((p) => p.role === "body");
+    if (bodyParamSpecs.length !== 1) {
+      throw new OperationError(
+        `Operation ${op.name} declared bodyShape="rawString" but has ${bodyParamSpecs.length} body params (must be exactly 1)`,
+        op.name,
+      );
+    }
+    const onlyName = bodyParamSpecs[0].name;
+    bodyToSend =
+      split.body && Object.prototype.hasOwnProperty.call(split.body, onlyName)
+        ? split.body[onlyName]
+        : undefined;
+  }
+
   let response: unknown;
   if (op.isAgile) {
     switch (op.verb) {
@@ -205,10 +242,10 @@ export async function invokeOperation(
         response = await client.agileGet(path, query);
         break;
       case "POST":
-        response = await client.agilePost(path, split.body, query);
+        response = await client.agilePost(path, bodyToSend, query);
         break;
       case "PUT":
-        response = await client.agilePut(path, split.body, query);
+        response = await client.agilePut(path, bodyToSend, query);
         break;
       case "DELETE":
         response = await client.agileDelete(path, query);
@@ -220,10 +257,10 @@ export async function invokeOperation(
         response = await client.get(path, query);
         break;
       case "POST":
-        response = await client.post(path, split.body, query);
+        response = await client.post(path, bodyToSend, query);
         break;
       case "PUT":
-        response = await client.put(path, split.body, query);
+        response = await client.put(path, bodyToSend, query);
         break;
       case "DELETE":
         response = await client.delete(path, query);
