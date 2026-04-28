@@ -167,24 +167,27 @@ describe("invokeAndSandbox", () => {
 
 // --- Bridge server (over a real socket) -------------------------------
 
-// Helper: open a connection to the running bridge and run a single
-// invoke. Mirrors what generated _client.ts does, but written
-// inline so we can exercise the wire format end-to-end.
-function callBridge(
+// Helpers: open a connection to the running bridge and exchange one
+// JSON line. callBridgeRaw lets a test send arbitrary request shapes
+// (e.g. malformed ones); callBridge wraps it for the typical
+// well-formed "invoke" request. Both handle Unix-socket and
+// loopback-TCP transports so tests run on POSIX and Windows.
+function dialBridge(address: string): net.Socket {
+  if (address.startsWith("tcp:")) {
+    const lastColon = address.lastIndexOf(":");
+    const host = address.slice(4, lastColon);
+    const port = Number(address.slice(lastColon + 1));
+    return net.connect({ host, port });
+  }
+  return net.connect({ path: address });
+}
+
+function callBridgeRaw(
   address: string,
-  request: { id: string; operation: string; args?: Record<string, unknown> },
-): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const target = address.startsWith("tcp:")
-      ? (() => {
-          const lastColon = address.lastIndexOf(":");
-          return {
-            host: address.slice(4, lastColon),
-            port: Number(address.slice(lastColon + 1)),
-          };
-        })()
-      : { path: address };
-    const socket = net.connect(target as never);
+  request: Record<string, unknown>,
+): Promise<any> {
+  return new Promise<any>((resolve, reject) => {
+    const socket = dialBridge(address);
     socket.setEncoding("utf8");
     let buffer = "";
     let settled = false;
@@ -195,13 +198,7 @@ function callBridge(
       fn();
     };
     socket.on("connect", () => {
-      socket.write(
-        JSON.stringify({
-          id: request.id,
-          method: "invoke",
-          params: { operation: request.operation, args: request.args ?? {} },
-        }) + "\n",
-      );
+      socket.write(JSON.stringify(request) + "\n");
     });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -215,6 +212,17 @@ function callBridge(
       }
     });
     socket.on("error", (err) => settle(() => reject(err)));
+  });
+}
+
+function callBridge(
+  address: string,
+  request: { id: string; operation: string; args?: Record<string, unknown> },
+): Promise<any> {
+  return callBridgeRaw(address, {
+    id: request.id,
+    method: "invoke",
+    params: { operation: request.operation, args: request.args ?? {} },
   });
 }
 
@@ -286,26 +294,13 @@ describe("startBridge", () => {
     const { client } = makeMockClient();
     bridge = await startBridge({ manifest: fixtureManifest, client });
 
-    const resp = await new Promise<any>((resolve, reject) => {
-      const socket = net.connect({ path: bridge!.address });
-      socket.setEncoding("utf8");
-      let buffer = "";
-      socket.on("connect", () => {
-        // Method != "invoke" — the bridge should reject.
-        socket.write(JSON.stringify({ id: "x", method: "frob" }) + "\n");
-      });
-      socket.on("data", (chunk: string) => {
-        buffer += chunk;
-        const nl = buffer.indexOf("\n");
-        if (nl < 0) return;
-        try {
-          resolve(JSON.parse(buffer.slice(0, nl)));
-          socket.end();
-        } catch (e) {
-          reject(e);
-        }
-      });
-      socket.on("error", reject);
+    // Use callBridgeRaw rather than the typed callBridge() helper so
+    // we can inject a request with method != "invoke". Mirrors what
+    // the typed helper does for transport selection (path vs tcp:),
+    // so this test works on Windows as well as POSIX.
+    const resp = await callBridgeRaw(bridge.address, {
+      id: "x",
+      method: "frob",
     });
 
     expect(resp.id).toBe("x");
@@ -337,6 +332,27 @@ describe("startBridge", () => {
     const { client } = makeMockClient();
     bridge = await startBridge({ manifest: fixtureManifest, client });
     expect(bridge.address).toBe(stalePath);
+  });
+
+  it("removes a directory pre-existing at the socket path", async () => {
+    if (process.platform === "win32") return;
+    // Hardening regression: an attacker (or a stuck process) on the
+    // same host could pre-create a directory at the predictable
+    // hash-fallback socket path. Without `recursive: true` on the
+    // stale-entry cleanup, fs.rm would throw EISDIR and kill server
+    // startup. We simulate that here by mkdir'ing the path before
+    // startBridge runs.
+    const addr = defaultBridgeAddress();
+    if (!addr.listen.path) throw new Error("expected POSIX socket path");
+    const stalePath = addr.listen.path;
+    await fs.mkdir(stalePath, { recursive: true });
+
+    const { client } = makeMockClient();
+    bridge = await startBridge({ manifest: fixtureManifest, client });
+    expect(bridge.address).toBe(stalePath);
+    // Confirm we replaced the dir with a real socket — connecting
+    // should succeed.
+    await fs.access(bridge.address);
   });
 });
 

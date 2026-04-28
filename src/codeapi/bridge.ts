@@ -148,14 +148,19 @@ export async function startBridge(
 ): Promise<BridgeServer> {
   const addr = opts.address ?? defaultBridgeAddress();
 
-  // POSIX: ensure the socket dir exists, and remove a stale socket
-  // file from a prior crashed session before binding (otherwise
-  // `listen()` errors with EADDRINUSE even though no process is
-  // holding it). Windows TCP doesn't need this.
+  // POSIX: ensure the socket dir exists, and remove a stale entry
+  // from a prior crashed session before binding (otherwise `listen()`
+  // errors with EADDRINUSE even though no process is holding it).
+  // `recursive: true` covers the case where something else has
+  // pre-created a *directory* at the socket path — without it, `rm`
+  // would throw EISDIR and kill startup. The hash-fallback path
+  // under tmpdir is predictable from the session id, so this is a
+  // hardening measure against same-host availability attacks. Windows
+  // TCP doesn't need this branch at all.
   if (addr.listen.path) {
     await fs.mkdir(path.dirname(addr.listen.path), { recursive: true });
     if (existsSync(addr.listen.path)) {
-      await fs.rm(addr.listen.path, { force: true });
+      await fs.rm(addr.listen.path, { force: true, recursive: true });
     }
   }
 

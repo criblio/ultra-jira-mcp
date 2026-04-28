@@ -220,6 +220,25 @@ describe("renderClientFile", () => {
     // Error shape from the bridge surfaces as a real Error.
     expect(out).toContain('"error" in resp');
   });
+
+  it("calls resolveSocket() inside the Promise constructor (no sync throw)", () => {
+    // Regression: an earlier draft called resolveSocket() before
+    // `return new Promise(...)`. A missing JIRA_MCP_SOCKET would
+    // then throw synchronously instead of producing a rejected
+    // promise, breaking `.catch()` and Promise.all callers. The
+    // body must declare `try { target = resolveSocket(); }` inside
+    // the executor and reject() on failure.
+    const out = renderClientFile();
+    // Match the *call site* (`target = resolveSocket()`), not the
+    // function definition `function resolveSocket()` that appears
+    // earlier in the file.
+    const promiseStart = out.indexOf("new Promise<Ref<unknown>>");
+    const callSite = out.indexOf("target = resolveSocket()");
+    expect(promiseStart).toBeGreaterThan(0);
+    expect(callSite).toBeGreaterThan(promiseStart);
+    expect(out).toContain("try {\n      target = resolveSocket()");
+    expect(out).toContain("reject(err);");
+  });
 });
 
 describe("renderTypesFile", () => {

@@ -272,9 +272,15 @@ export function renderClientFile(): string {
     `  operation: string,\n` +
     `  args: Record<string, unknown>,\n` +
     `): Promise<Ref<unknown>> {\n` +
-    `  const target = resolveSocket();\n` +
     `  const id = String(++nextId);\n` +
     `  return new Promise<Ref<unknown>>((resolve, reject) => {\n` +
+    `    let target: { path?: string; host?: string; port?: number };\n` +
+    `    try {\n` +
+    `      target = resolveSocket();\n` +
+    `    } catch (err) {\n` +
+    `      reject(err);\n` +
+    `      return;\n` +
+    `    }\n` +
     `    const socket: Socket = connect(target as never);\n` +
     `    socket.setEncoding("utf8");\n` +
     `    let buffer = "";\n` +
