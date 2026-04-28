@@ -167,6 +167,7 @@ export const operations: Manifest = [
       { name: "orderBy", role: "query" },
       { name: "expand", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "comment.add",
@@ -249,6 +250,7 @@ export const operations: Manifest = [
       { name: "maxResults", role: "query" },
       { name: "orderBy", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "project.get",
@@ -305,6 +307,7 @@ export const operations: Manifest = [
     verb: "GET",
     pathTemplate: "/project/{projectIdOrKey}/components",
     params: [{ name: "projectIdOrKey", role: "path", required: true }],
+    trim: "bareList",
   },
   {
     name: "project.createComponent",
@@ -328,6 +331,7 @@ export const operations: Manifest = [
       { name: "projectIdOrKey", role: "path", required: true },
       { name: "expand", role: "query" },
     ],
+    trim: "bareList",
   },
   {
     name: "project.createVersion",
@@ -390,6 +394,8 @@ export const operations: Manifest = [
       { name: "maxResults", role: "query" },
       { name: "property", role: "query" },
     ],
+    // /user/search returns a bare array.
+    trim: "bareList",
   },
   {
     name: "user.get",
@@ -419,6 +425,8 @@ export const operations: Manifest = [
       { name: "actionDescriptorId", role: "query" },
       { name: "recommend", role: "query" },
     ],
+    // /user/assignable/search returns a bare array.
+    trim: "bareList",
   },
   {
     name: "user.bulkGet",
@@ -430,6 +438,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    trim: "list",
   },
 
   // =================================================================
@@ -448,6 +457,7 @@ export const operations: Manifest = [
       { name: "name", role: "query" },
       { name: "projectKeyOrId", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "board.get",
@@ -500,6 +510,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "board.backlog",
@@ -514,6 +525,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "board.epics",
@@ -527,6 +539,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    trim: "list",
   },
 
   // =================================================================
@@ -544,6 +557,7 @@ export const operations: Manifest = [
       { name: "maxResults", role: "query" },
       { name: "state", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "sprint.get",
@@ -605,6 +619,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "sprint.moveIssues",
@@ -654,6 +669,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "epic.moveIssuesIn",
@@ -691,6 +707,7 @@ export const operations: Manifest = [
       { name: "startedBefore", role: "query" },
       { name: "expand", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "worklog.add",
@@ -763,6 +780,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "expand", role: "query" },
     ],
+    trim: "list",
   },
   {
     name: "filter.get",
@@ -814,6 +832,7 @@ export const operations: Manifest = [
     verb: "GET",
     pathTemplate: "/filter/favourite",
     params: [{ name: "expand", role: "query" }],
+    trim: "bareList",
   },
 
   // =================================================================
@@ -862,6 +881,7 @@ export const operations: Manifest = [
     verb: "GET",
     pathTemplate: "/issue/{issueIdOrKey}/watchers",
     params: [{ name: "issueIdOrKey", role: "path", required: true }],
+    trim: "watcherList",
   },
   {
     name: "watcher.add",
@@ -894,6 +914,7 @@ export const operations: Manifest = [
     verb: "GET",
     pathTemplate: "/issue/{issueIdOrKey}/votes",
     params: [{ name: "issueIdOrKey", role: "path", required: true }],
+    trim: "voteList",
   },
   {
     name: "vote.add",
@@ -976,6 +997,10 @@ export const operations: Manifest = [
       { name: "caseInsensitive", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    // /groups/picker returns { groups: [...], total }; treat as a
+    // paginated list — paginatedListSummary's pageItemCount falls
+    // through to the array length when `groups` isn't a known key.
+    trim: "list",
   },
   {
     name: "group.members",
@@ -988,6 +1013,7 @@ export const operations: Manifest = [
       { name: "startAt", role: "query" },
       { name: "maxResults", role: "query" },
     ],
+    trim: "list",
   },
 
   // =================================================================

@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   attachmentSummary,
+  bareListSummary,
   commentSummary,
   issueSummary,
+  paginatedListSummary,
   projectSummary,
   searchSummary,
   userSummary,
+  voteListSummary,
+  watcherListSummary,
 } from "../../src/core/trim.js";
 import type {
   JiraAttachment,
@@ -240,5 +244,116 @@ describe("searchSummary", () => {
       status: "To Do",
       priority: "High",
     });
+  });
+});
+
+// --- paginatedListSummary ----------------------------------------------
+
+describe("paginatedListSummary", () => {
+  it("emits count + metadata only — no inline items", () => {
+    const r = {
+      total: 26,
+      startAt: 0,
+      maxResults: 100,
+      comments: Array.from({ length: 26 }, (_, i) => ({ id: String(i) })),
+    };
+    const s = paginatedListSummary(r);
+    expect(s).toEqual({
+      total: 26,
+      startAt: 0,
+      maxResults: 100,
+      truncated: true,
+    });
+    // No items inline — that's the whole point.
+    expect(Object.keys(s)).not.toContain("comments");
+    expect(Object.keys(s)).not.toContain("items");
+  });
+
+  it("recognizes the various Jira list array keys", () => {
+    expect(paginatedListSummary({ total: 1, comments: [{}] }).truncated).toBe(true);
+    expect(paginatedListSummary({ total: 1, worklogs: [{}] }).truncated).toBe(true);
+    expect(paginatedListSummary({ total: 1, issues: [{}] }).truncated).toBe(true);
+    expect(paginatedListSummary({ total: 1, values: [{}] }).truncated).toBe(true);
+    expect(paginatedListSummary({ total: 1, groups: [{}] }).truncated).toBe(true);
+  });
+
+  it("falls back to itemCount when total/maxResults are missing", () => {
+    const s = paginatedListSummary({ comments: [{}, {}, {}] });
+    expect(s).toEqual({
+      total: 3,
+      startAt: 0,
+      maxResults: 3,
+      truncated: true,
+    });
+  });
+
+  it("reports an empty page as not truncated", () => {
+    const s = paginatedListSummary({ total: 0, startAt: 0, maxResults: 50, comments: [] });
+    expect(s).toEqual({
+      total: 0,
+      startAt: 0,
+      maxResults: 50,
+      truncated: false,
+    });
+  });
+});
+
+// --- bareListSummary ----------------------------------------------------
+
+describe("bareListSummary", () => {
+  it("counts items in a bare array", () => {
+    expect(bareListSummary([{}, {}, {}])).toEqual({ count: 3, truncated: true });
+  });
+
+  it("handles empty / null / non-array input", () => {
+    expect(bareListSummary([])).toEqual({ count: 0, truncated: false });
+    expect(bareListSummary(null)).toEqual({ count: 0, truncated: false });
+    expect(bareListSummary(undefined)).toEqual({ count: 0, truncated: false });
+  });
+});
+
+// --- watcherListSummary -------------------------------------------------
+
+describe("watcherListSummary", () => {
+  it("surfaces watchCount and isWatching, hides watchers array", () => {
+    const r = {
+      watchCount: 5,
+      isWatching: true,
+      watchers: Array.from({ length: 5 }, (_, i) => ({ accountId: String(i) })),
+    };
+    const s = watcherListSummary(r);
+    expect(s).toEqual({ watchCount: 5, isWatching: true, truncated: true });
+  });
+
+  it("falls back to watchers.length when watchCount is missing", () => {
+    const s = watcherListSummary({ watchers: [{}, {}] });
+    expect(s.watchCount).toBe(2);
+  });
+
+  it("treats null/empty input as empty", () => {
+    expect(watcherListSummary(null)).toEqual({
+      watchCount: 0,
+      isWatching: undefined,
+      truncated: false,
+    });
+  });
+});
+
+// --- voteListSummary ----------------------------------------------------
+
+describe("voteListSummary", () => {
+  it("surfaces votes count and hasVoted, hides voters array", () => {
+    const r = {
+      votes: 3,
+      hasVoted: false,
+      voters: [{ accountId: "a" }, { accountId: "b" }, { accountId: "c" }],
+    };
+    const s = voteListSummary(r);
+    expect(s).toEqual({ votes: 3, hasVoted: false, truncated: true });
+  });
+
+  it("falls back to voters.length when votes is missing", () => {
+    const s = voteListSummary({ voters: [{}] });
+    expect(s.votes).toBe(1);
   });
 });

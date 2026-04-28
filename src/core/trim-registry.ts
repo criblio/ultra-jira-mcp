@@ -8,11 +8,15 @@
 
 import {
   attachmentSummary,
+  bareListSummary,
   commentSummary,
   issueSummary,
+  paginatedListSummary,
   projectSummary,
   searchSummary,
   userSummary,
+  voteListSummary,
+  watcherListSummary,
 } from "./trim.js";
 
 // Each projection takes the raw response and returns a compact
@@ -22,12 +26,20 @@ import {
 export type TrimFn = (input: unknown) => unknown;
 
 export const trimRegistry = {
+  // Single-entity projections.
   issue: issueSummary as TrimFn,
   search: searchSummary as TrimFn,
   comment: commentSummary as TrimFn,
   attachment: attachmentSummary as TrimFn,
   user: userSummary as TrimFn,
   project: projectSummary as TrimFn,
+  // Paginated lists — count + metadata, ref carries the items.
+  list: paginatedListSummary as TrimFn,
+  // Bare-array lists — count only, ref carries the items.
+  bareList: bareListSummary as TrimFn,
+  // Specialized list shapes.
+  watcherList: watcherListSummary as TrimFn,
+  voteList: voteListSummary as TrimFn,
 } as const;
 
 export type TrimKey = keyof typeof trimRegistry;
