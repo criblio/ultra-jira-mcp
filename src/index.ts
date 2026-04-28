@@ -9,6 +9,7 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+
 import { getConfig } from "./config.js";
 import { JiraClient, JiraApiError } from "./auth/jira-client.js";
 import { v2Tools, handleV2Tool } from "./tools/v2/index.js";
@@ -17,135 +18,172 @@ import {
   resourceTemplates,
   handleResource,
 } from "./resources/index.js";
+import { bootCodeApi } from "./codeapi/boot.js";
+import type { BridgeServer } from "./codeapi/bridge.js";
+import {
+  buildCodeApiToolResponse,
+  jiraCodeApiToolDefinition,
+  JIRA_CODE_API_TOOL_NAME,
+  type CodeApiToolContext,
+} from "./codeapi/tool.js";
+import { closeHttpPool } from "./core/http.js";
 
-// Create the MCP server using the lower-level Server class for more control
+// --- Server -----------------------------------------------------------
+
 const server = new Server(
-  {
-    name: "jira-mcp",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
-    },
-  }
+  { name: "jira-mcp", version: "2.0.0" },
+  { capabilities: { tools: {}, resources: {} } },
 );
 
-// Initialize Jira client (will be created on first use)
 let jiraClient: JiraClient | null = null;
-
 function getClient(): JiraClient {
-  if (!jiraClient) {
-    const config = getConfig();
-    jiraClient = new JiraClient(config);
-  }
+  if (!jiraClient) jiraClient = new JiraClient(getConfig());
   return jiraClient;
 }
 
-// Register tools list handler. v2 ships 16 consolidated tools that
-// replace v1's 85 (one per category, action-discriminated). Filtering
-// by category was useful in v1 because it kept the tool-list token
-// cost down; v2's much smaller surface makes it less necessary, and
-// we can add it back if asked.
+// Mode-specific state populated at startup. Read by the handlers
+// below, so mode dispatch happens once instead of per-request.
+type ModeState =
+  | { mode: "classic" }
+  | { mode: "code-api"; bridge: BridgeServer; ctx: CodeApiToolContext };
+
+let modeState: ModeState | null = null;
+
+// --- Handlers ---------------------------------------------------------
+
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: v2Tools };
+  if (!modeState) throw new Error("server not initialized");
+  if (modeState.mode === "classic") return { tools: v2Tools };
+  return { tools: [jiraCodeApiToolDefinition] };
 });
 
-// Register tool call handler
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (!modeState) throw new Error("server not initialized");
   const { name, arguments: args } = request.params;
 
   try {
+    if (modeState.mode === "code-api") {
+      if (name !== JIRA_CODE_API_TOOL_NAME) {
+        throw new Error(
+          `Unknown tool in code-api mode: ${name}. Only "${JIRA_CODE_API_TOOL_NAME}" is exposed; ` +
+            `set JIRA_TOOL_MODE=classic for the consolidated tool surface.`,
+        );
+      }
+      const result = buildCodeApiToolResponse(modeState.ctx);
+      return textResponse(result);
+    }
+
     const client = getClient();
     const result = await handleV2Tool(client, name, args || {});
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-    };
+    return textResponse(result);
   } catch (error) {
-    if (error instanceof JiraApiError) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              {
-                error: error.message,
-                statusCode: error.statusCode,
-                details: error.response,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    if (error instanceof Error) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ error: error.message }, null, 2),
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({ error: "Unknown error occurred" }, null, 2),
-        },
-      ],
-      isError: true,
-    };
+    return errorResponse(error);
   }
 });
 
-// Register resources list handler
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  return { resources: resourceDefinitions };
-});
+server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+  resources: resourceDefinitions,
+}));
 
-// Register resource templates list handler
-server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-  return { resourceTemplates };
-});
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates,
+}));
 
-// Register resource read handler
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const { uri } = request.params;
-
   try {
     const client = getClient();
     return await handleResource(client, uri);
   } catch (error) {
     if (error instanceof JiraApiError) {
-      throw new Error(
-        `Jira API error (${error.statusCode}): ${error.message}`
-      );
+      throw new Error(`Jira API error (${error.statusCode}): ${error.message}`);
     }
     throw error;
   }
 });
 
-// Start the server
+// --- Response helpers --------------------------------------------------
+
+function textResponse(payload: unknown) {
+  return {
+    content: [
+      { type: "text" as const, text: JSON.stringify(payload, null, 2) },
+    ],
+  };
+}
+
+function errorResponse(error: unknown) {
+  if (error instanceof JiraApiError) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            { error: error.message, statusCode: error.statusCode, details: error.response },
+            null,
+            2,
+          ),
+        },
+      ],
+      isError: true,
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify({ error: error.message }, null, 2) },
+      ],
+      isError: true,
+    };
+  }
+  return {
+    content: [
+      { type: "text" as const, text: JSON.stringify({ error: "Unknown error occurred" }, null, 2) },
+    ],
+    isError: true,
+  };
+}
+
+// --- Lifecycle --------------------------------------------------------
+
 async function main() {
+  const cfg = getConfig();
+  if (cfg.toolMode === "code-api") {
+    const { bridge, ctx } = await bootCodeApi({ client: getClient() });
+    modeState = { mode: "code-api", bridge, ctx };
+  } else {
+    modeState = { mode: "classic" };
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Jira MCP server running on stdio");
+  console.error(
+    `Jira MCP server running on stdio (mode=${modeState.mode}` +
+      (modeState.mode === "code-api" ? `, api=${modeState.ctx.apiDir}` : "") +
+      ")",
+  );
 }
+
+async function shutdown(signal: NodeJS.Signals) {
+  console.error(`Received ${signal}, shutting down`);
+  // Order matters:
+  //   1) close the MCP transport so we stop accepting new tool calls
+  //   2) close the bridge so in-flight stub calls drain rather than
+  //      get cut mid-response
+  //   3) close the undici pool so any pending Jira HTTP request
+  //      finishes (or is allowed to error cleanly) before exit
+  // Each step is best-effort — a failure in one shouldn't block the
+  // others.
+  await server.close().catch(() => {});
+  if (modeState?.mode === "code-api") {
+    await modeState.bridge.close().catch(() => {});
+  }
+  await closeHttpPool().catch(() => {});
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 main().catch((error) => {
   console.error("Fatal error:", error);
