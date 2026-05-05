@@ -39,8 +39,14 @@ If you used `JIRA_DISABLED_TOOLS`, switch to `JIRA_DISABLED_ACTIONS` and transla
 | `jira_delete_comment` | `comment.delete` |
 | `jira_delete_attachment` | `attachment.delete` |
 | `jira_delete_worklog` | `worklog.delete` |
+| `jira_delete_issue_link` | `issueLink.delete` |
 
-The format is `category.action` — same as v2's manifest operation names.
+The format is `category.action`, where `category.action` is the **manifest operation name** — not the consolidated tool's category suffix. For most categories the two are the same (`issue.delete`, `project.delete`), but the `jira_link` tool is an exception:
+
+- The consolidated tool is **`jira_link`**, so `JIRA_ENABLED_CATEGORIES` uses **`link`**.
+- The underlying manifest operations are **`issueLink.create`**, **`issueLink.delete`**, etc., so `JIRA_DISABLED_ACTIONS` uses **`issueLink.delete`** — `link.delete` is silently ignored.
+
+The same shape applies to operations folded into other tools: `JIRA_DISABLED_ACTIONS=permissions.mine` (exposed via `jira_group.myPermissions`), `JIRA_DISABLED_ACTIONS=vote.add` (exposed via `jira_watcher.addVote`). The full operation names live in [src/core/operations.ts](../src/core/operations.ts).
 
 If you used `JIRA_ENABLED_CATEGORIES` with `issueLink`, change it to `link`. All other category names are unchanged.
 
@@ -53,10 +59,33 @@ For agents using Claude/Claude Code: nothing to do — Claude reads the new shap
 { "id": "10001", "key": "PROJ-1", "fields": { "summary": "...", "status": {...}, "comment": { "comments": [...] }, ... } }
 ```
 
-**v2 response (sandboxed):**
+**v2 classic response (the default — what `jira_issue` etc. return through MCP):** the trim projection directly. No envelope, no `ref`. The full untrimmed body is *not* written to disk in classic mode.
+
 ```json
 {
-  "summary": { "key": "PROJ-1", "status": "In Progress", "assignee": {...}, "recentComments": [...] },
+  "key": "PROJ-1",
+  "id": "10001",
+  "summary": "Login form crash on Safari",
+  "status": "In Progress",
+  "assignee": { "accountId": "...", "displayName": "..." },
+  "priority": "High",
+  "labels": [],
+  "descriptionPreview": "...",
+  "descriptionTruncated": false,
+  "commentCount": 26,
+  "recentComments": [...],
+  "attachmentCount": 2,
+  "attachments": [...]
+}
+```
+
+Field names are stable across versions, so anything reading `result.key` / `result.status` keeps working with a smaller payload. List endpoints (e.g. `jira_comment.list`) return `{total, startAt, maxResults, truncated}` only — no inline items; rerun the call with different paging or use a more specific tool when you need the rows.
+
+**v2 code-api response (only when `JIRA_TOOL_MODE=code-api`):** a `SandboxResult` envelope. Each call returns the trimmed projection in `summary` and a filesystem path to the full untrimmed body in `ref`.
+
+```json
+{
+  "summary": { "key": "PROJ-1", "status": "In Progress", "assignee": {...}, ... },
   "ref": "/tmp/jira-mcp/abc123/issue-get/<hash>.json",
   "hash": "abc123def456...",
   "fullSize": 47823,
@@ -64,7 +93,7 @@ For agents using Claude/Claude Code: nothing to do — Claude reads the new shap
 }
 ```
 
-Read `ref` (it's an absolute path to the full untrimmed Jira response on disk) only when you need fields the summary omits.
+In code-api mode, `summary` carries the same shape as the classic top-level response. The agent reads `ref` (an absolute path to the full untrimmed Jira JSON) only when it needs fields the summary omits.
 
 ## Full tool name mapping
 

@@ -153,8 +153,12 @@ export interface SearchSummary {
   total?: number;
   startAt?: number;
   maxResults?: number;
-  // Cursor-based pagination signal from /search/jql. `false` (or
-  // missing `nextPageToken`) means more pages are available.
+  // Cursor-based pagination signal from /search/jql. `isLast: false`
+  // (or `isLast` missing alongside a non-empty `nextPageToken`) means
+  // more pages are available; `isLast: true` (or a missing
+  // `nextPageToken` on the last page) means the cursor is exhausted.
+  // Pass the `nextPageToken` value back into the next call to
+  // continue paging.
   isLast?: boolean;
   nextPageToken?: string;
   issues: Array<Pick<IssueSummary, "key" | "summary" | "status" | "assignee" | "priority" | "updated">>;
