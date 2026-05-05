@@ -247,6 +247,37 @@ describe("buildInputSchema", () => {
     expect(picky?.oneOf?.[2]).toEqual({ type: "number" });
   });
 
+  it("preserves descriptions when describe() is on the optional wrapper", () => {
+    // Zod 4 attaches describe() metadata to whichever node it's
+    // called on. The common idiom in v2 is
+    // `z.string().optional().describe(...)` — describe on the
+    // outer optional. The schema-builder used to read .description
+    // only after unwrapping, silently dropping every description
+    // attached to an optional/nullable wrapper.
+    const tool: ConsolidatedTool = {
+      name: "jira_desc",
+      description: "",
+      actions: {
+        a: {
+          description: "",
+          schema: z.object({
+            outer: z.string().optional().describe("on the wrapper"),
+            inner: z.string().describe("on the inner").optional(),
+          }),
+          operation: "fx.get",
+        },
+      },
+    };
+    const schema = buildInputSchema(tool) as {
+      properties: {
+        outer: { description?: string };
+        inner: { description?: string };
+      };
+    };
+    expect(schema.properties.outer.description).toBe("on the wrapper");
+    expect(schema.properties.inner.description).toBe("on the inner");
+  });
+
   it("emits a property-level oneOf when a field has different types across actions", () => {
     // Regression: jira_issue.fields is z.string() in `get` (CSV
     // list) but z.record(...) in `create`/`update`/`transition`.

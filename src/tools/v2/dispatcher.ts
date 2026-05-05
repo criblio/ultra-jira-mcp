@@ -204,9 +204,17 @@ function unwrap(schema: ZodType): ZodType {
 }
 
 function zodFieldToJsonSchema(schema: ZodType): unknown {
+  // Zod 4 attaches `.describe()` metadata to whichever node it was
+  // called on. Our action schemas use `z.string().optional().describe(...)`
+  // (describe applied to the optional wrapper) far more often than
+  // the inverse, so prefer the outer description and fall back to
+  // the inner. Without this, every `.optional().describe()` field
+  // silently dropped its description from the emitted JSON Schema.
+  const outer = (schema as unknown as { description?: string }).description;
   const inner = unwrap(schema);
   const kind = zodKind(inner);
-  const description = (inner as unknown as { description?: string }).description;
+  const description =
+    outer ?? (inner as unknown as { description?: string }).description;
   const tail = description ? { description } : {};
   switch (kind) {
     case "ZodString":
