@@ -1,6 +1,6 @@
 // The single MCP tool exposed in code-api mode (PR #10).
 //
-// In default mode the server publishes only this tool. Calling it
+// In code-api mode the server publishes only this tool. Calling it
 // returns the path to the generated TypeScript stubs and a short
 // usage example; the agent then drives Jira through those stubs in
 // its own execution environment (Claude Code's Bash + tsx, etc.) and
