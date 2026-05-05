@@ -39,6 +39,10 @@ export interface BootedCodeApi {
 
 export interface BootCodeApiOpts {
   client: JiraClient;
+  // Forwarded to startBridge so JIRA_DISABLED_ACTIONS rules apply to
+  // bridge dispatch. Without this, an op disabled in classic mode
+  // would still be reachable when a user opts into code-api.
+  disabledActions?: readonly string[];
   // Override hooks for tests. Production callers leave these unset.
   refsImportPath?: string;
   apiDir?: string;
@@ -68,6 +72,7 @@ export async function bootCodeApi(
   const bridge = await startBridge({
     manifest: operations,
     client: opts.client,
+    disabledActions: opts.disabledActions,
   });
 
   // Place the socket in the *server* env so any subprocess (Claude

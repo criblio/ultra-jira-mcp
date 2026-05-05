@@ -10,9 +10,9 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { getConfig } from "./config.js";
+import { getConfig, type JiraConfig } from "./config.js";
 import { JiraClient, JiraApiError } from "./auth/jira-client.js";
-import { v2Tools, handleV2Tool } from "./tools/v2/index.js";
+import { getV2Tools, handleV2Tool } from "./tools/v2/index.js";
 import {
   resourceDefinitions,
   resourceTemplates,
@@ -35,16 +35,20 @@ const server = new Server(
   { capabilities: { tools: {}, resources: {} } },
 );
 
+let jiraConfig: JiraConfig | null = null;
 let jiraClient: JiraClient | null = null;
 function getClient(): JiraClient {
-  if (!jiraClient) jiraClient = new JiraClient(getConfig());
+  if (!jiraClient) {
+    jiraConfig ??= getConfig();
+    jiraClient = new JiraClient(jiraConfig);
+  }
   return jiraClient;
 }
 
 // Mode-specific state populated at startup. Read by the handlers
 // below, so mode dispatch happens once instead of per-request.
 type ModeState =
-  | { mode: "classic" }
+  | { mode: "classic"; tools: ReturnType<typeof getV2Tools> }
   | { mode: "code-api"; bridge: BridgeServer; ctx: CodeApiToolContext };
 
 let modeState: ModeState | null = null;
@@ -53,7 +57,7 @@ let modeState: ModeState | null = null;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (!modeState) throw new Error("server not initialized");
-  if (modeState.mode === "classic") return { tools: v2Tools };
+  if (modeState.mode === "classic") return { tools: modeState.tools };
   return { tools: [jiraCodeApiToolDefinition] };
 });
 
@@ -74,7 +78,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     const client = getClient();
-    const result = await handleV2Tool(client, name, args || {});
+    // jiraConfig is non-null at this point — getClient() populated it.
+    const result = await handleV2Tool(
+      client,
+      name,
+      args || {},
+      jiraConfig!.toolFilter.disabledActions,
+    );
     return textResponse(result);
   } catch (error) {
     return errorResponse(error);
@@ -147,12 +157,28 @@ function errorResponse(error: unknown) {
 // --- Lifecycle --------------------------------------------------------
 
 async function main() {
-  const cfg = getConfig();
-  if (cfg.toolMode === "code-api") {
-    const { bridge, ctx } = await bootCodeApi({ client: getClient() });
+  jiraConfig = getConfig();
+  if (jiraConfig.toolMode === "code-api") {
+    const { bridge, ctx } = await bootCodeApi({
+      client: getClient(),
+      disabledActions: jiraConfig.toolFilter.disabledActions,
+    });
     modeState = { mode: "code-api", bridge, ctx };
   } else {
-    modeState = { mode: "classic" };
+    const tools = getV2Tools(jiraConfig.toolFilter);
+    modeState = { mode: "classic", tools };
+  }
+
+  // Surface the active filter on stderr so users can confirm their
+  // env vars took effect.
+  const f = jiraConfig.toolFilter;
+  if (f.enabledCategories.length > 0) {
+    console.error(
+      `Tool categories enabled: ${f.enabledCategories.join(", ")}`,
+    );
+  }
+  if (f.disabledActions.length > 0) {
+    console.error(`Actions disabled: ${f.disabledActions.join(", ")}`);
   }
 
   const transport = new StdioServerTransport();
@@ -160,6 +186,7 @@ async function main() {
   console.error(
     `Jira MCP server running on stdio (mode=${modeState.mode}` +
       (modeState.mode === "code-api" ? `, api=${modeState.ctx.apiDir}` : "") +
+      (modeState.mode === "classic" ? `, tools=${modeState.tools.length}` : "") +
       ")",
   );
 }

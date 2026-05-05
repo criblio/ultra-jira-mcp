@@ -183,6 +183,27 @@ export function findOperation(manifest: Manifest, name: string): Operation {
   return op;
 }
 
+// Throw if the operation is on the user's disabled list. Surfaces as
+// an OperationError so it propagates uniformly through both classic
+// dispatch and the bridge handler.
+//
+// `disabledActions` is the raw list from JIRA_DISABLED_ACTIONS — a Set
+// would be tighter, but the list is short (typically <20 entries) and
+// callers already pass strings, so the array form keeps the public
+// signature simple.
+export function assertOperationEnabled(
+  name: string,
+  disabledActions: readonly string[] | undefined,
+): void {
+  if (!disabledActions || disabledActions.length === 0) return;
+  if (disabledActions.includes(name)) {
+    throw new OperationError(
+      `Operation ${name} is disabled by JIRA_DISABLED_ACTIONS.`,
+      name,
+    );
+  }
+}
+
 // Executes an operation against a JiraClient and returns the *raw*
 // response — no trim projection applied. Used by Layer 3's bridge
 // handler, which wants to write the full response to disk via
@@ -190,13 +211,19 @@ export function findOperation(manifest: Manifest, name: string): Operation {
 //
 // Layer 2 callers should keep using `invokeOperation` (which trims
 // in-place) so consolidated tools return the compact shape directly.
+//
+// `disabledActions` (optional) is the user's JIRA_DISABLED_ACTIONS
+// blocklist. Enforced here — at the only point both modes funnel
+// through — so the safety guarantee survives a code-api opt-in.
 export async function invokeOperationRaw(
   manifest: Manifest,
   client: JiraClient,
   name: string,
   args: Record<string, unknown>,
+  disabledActions?: readonly string[],
 ): Promise<{ op: Operation; response: unknown }> {
   const op = findOperation(manifest, name);
+  assertOperationEnabled(name, disabledActions);
 
   const split = splitArgs(op, args);
   if (split.missingRequired.length > 0) {
@@ -293,8 +320,15 @@ export async function invokeOperation(
   client: JiraClient,
   name: string,
   args: Record<string, unknown>,
+  disabledActions?: readonly string[],
 ): Promise<unknown> {
-  const { op, response } = await invokeOperationRaw(manifest, client, name, args);
+  const { op, response } = await invokeOperationRaw(
+    manifest,
+    client,
+    name,
+    args,
+    disabledActions,
+  );
   if (op.trim) {
     const projection = trimRegistry[op.trim];
     return projection(response);

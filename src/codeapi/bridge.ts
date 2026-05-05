@@ -138,6 +138,11 @@ export interface StartBridgeOpts {
   manifest: Manifest;
   client: JiraClient;
   address?: BridgeAddress;
+  // Optional. Forwarded to invokeOperationRaw for every bridge call,
+  // so JIRA_DISABLED_ACTIONS blocks reach the agent's tsx subprocess
+  // before any Jira HTTP request happens — the same safety contract
+  // classic mode gets.
+  disabledActions?: readonly string[];
 }
 
 // Start the bridge server. Returns once it's listening. The caller
@@ -165,7 +170,7 @@ export async function startBridge(
   }
 
   const server = net.createServer((socket) => {
-    handleConnection(socket, opts.manifest, opts.client);
+    handleConnection(socket, opts.manifest, opts.client, opts.disabledActions);
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -226,6 +231,7 @@ function handleConnection(
   socket: net.Socket,
   manifest: Manifest,
   client: JiraClient,
+  disabledActions: readonly string[] | undefined,
 ): void {
   let buffer = "";
   socket.setEncoding("utf8");
@@ -237,7 +243,7 @@ function handleConnection(
       const line = buffer.slice(0, nl);
       buffer = buffer.slice(nl + 1);
       if (line.length === 0) continue;
-      void dispatchLine(line, socket, manifest, client);
+      void dispatchLine(line, socket, manifest, client, disabledActions);
     }
   });
 
@@ -252,6 +258,7 @@ async function dispatchLine(
   socket: net.Socket,
   manifest: Manifest,
   client: JiraClient,
+  disabledActions: readonly string[] | undefined,
 ): Promise<void> {
   let req: BridgeRequest | null = null;
   try {
@@ -287,6 +294,7 @@ async function dispatchLine(
       client,
       req.params.operation,
       req.params.args ?? {},
+      disabledActions,
     );
     writeResponse(socket, { id: req.id, result });
   } catch (err) {
@@ -323,12 +331,14 @@ export async function invokeAndSandbox(
   client: JiraClient,
   operation: string,
   args: Record<string, unknown>,
+  disabledActions?: readonly string[],
 ): Promise<SandboxResult<unknown>> {
   const { op, response } = await invokeOperationRaw(
     manifest,
     client,
     operation,
     args,
+    disabledActions,
   );
 
   const summarize = op.trim

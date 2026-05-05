@@ -204,6 +204,9 @@ export async function dispatchTool(
   manifest: Manifest,
   client: JiraClient,
   rawArgs: Record<string, unknown>,
+  // Optional. Forwarded to invokeOperation so a JIRA_DISABLED_ACTIONS
+  // entry blocks the call before any Jira HTTP request happens.
+  disabledActions?: readonly string[],
 ): Promise<unknown> {
   // Pull off `action`. Anything missing or wrong-typed is a caller
   // error and stops here with a clear message.
@@ -247,6 +250,7 @@ export async function dispatchTool(
       client,
       def.operation,
       validated.data as Record<string, unknown>,
+      disabledActions,
     );
   } catch (err) {
     if (err instanceof OperationError) {

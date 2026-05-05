@@ -363,3 +363,43 @@ describe("invokeOperation", () => {
     ).rejects.toThrow(/rawString.*must be exactly 1/);
   });
 });
+
+describe("invokeOperation disabledActions enforcement", () => {
+  it("throws OperationError before making any HTTP call when the op is disabled", async () => {
+    const ctx = makeMockClient();
+    const err: unknown = await invokeOperation(
+      manifest,
+      ctx.client,
+      "issue.delete",
+      { key: "PROJ-1" },
+      ["issue.delete"],
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(OperationError);
+    expect((err as Error).message).toMatch(/JIRA_DISABLED_ACTIONS/);
+    // Critical: no Jira call was made.
+    expect(ctx.calls).toEqual([]);
+  });
+
+  it("allows ops that aren't on the disabled list", async () => {
+    const ctx = makeMockClient();
+    ctx.setReturn({ id: "1", key: "PROJ-1", fields: { summary: "ok" } });
+    await invokeOperation(
+      manifest,
+      ctx.client,
+      "issue.get",
+      { key: "PROJ-1" },
+      ["issue.delete", "project.delete"],
+    );
+    expect(ctx.calls).toHaveLength(1);
+  });
+
+  it("treats undefined/empty disabledActions as no filter", async () => {
+    const ctx = makeMockClient();
+    await invokeOperation(manifest, ctx.client, "issue.delete", { key: "PROJ-1" });
+    expect(ctx.calls).toHaveLength(1);
+
+    const ctx2 = makeMockClient();
+    await invokeOperation(manifest, ctx2.client, "issue.delete", { key: "PROJ-1" }, []);
+    expect(ctx2.calls).toHaveLength(1);
+  });
+});

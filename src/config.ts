@@ -24,6 +24,31 @@ export type TokenType = "scoped" | "classic";
 //   queries (jq filters, multi-call investigations).
 export type ToolMode = "code-api" | "classic";
 
+// Tool filtering surface (ported from v1 main).
+//
+// Two independent knobs:
+//   - enabledCategories: whitelist of consolidated tool categories
+//     (e.g. "issue", "search", "comment"). Empty = all categories.
+//     Filters what shows up in the MCP tool listing in classic mode.
+//   - disabledActions: blacklist of fine-grained operation names from
+//     the manifest (e.g. "issue.delete", "project.delete"). Enforced
+//     at the manifest dispatch layer so it applies in *both* classic
+//     and code-api modes — a destructive op disabled here can't be
+//     reached through the bridge either.
+//
+// Categories filter the user-facing surface; disabled actions are a
+// safety guarantee that survives mode changes.
+export interface ToolFilterConfig {
+  // Names match consolidated v2 tool categories (the part after `jira_`):
+  // issue, search, comment, user, project, board, sprint, epic, worklog,
+  // attachment, filter, link, watcher, field, group, server. Empty = no
+  // filter (all categories enabled).
+  enabledCategories: string[];
+  // Manifest operation names like "issue.delete", "vote.add",
+  // "permissions.mine". Empty = no actions disabled.
+  disabledActions: string[];
+}
+
 export interface JiraConfig {
   host: string;
   email: string;
@@ -31,6 +56,7 @@ export interface JiraConfig {
   tokenType: TokenType;
   cloudId?: string; // Required for scoped tokens, can be auto-fetched
   toolMode: ToolMode;
+  toolFilter: ToolFilterConfig;
 }
 
 /**
@@ -54,12 +80,73 @@ function parseToolMode(raw: string | undefined): ToolMode {
   );
 }
 
+// Canonical list of consolidated v2 tool categories. Mirrors the
+// `jira_<category>` MCP tool names without the prefix. Kept as a
+// constant rather than derived from the tools array to avoid a
+// module cycle (config is imported broadly; tools/v2 is not).
+export const CONSOLIDATED_CATEGORIES = [
+  "issue",
+  "search",
+  "comment",
+  "user",
+  "project",
+  "board",
+  "sprint",
+  "epic",
+  "worklog",
+  "attachment",
+  "filter",
+  "link",
+  "watcher",
+  "field",
+  "group",
+  "server",
+] as const;
+
+function splitCsv(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function parseToolFilter(): ToolFilterConfig {
+  const enabledCategories = splitCsv(process.env.JIRA_ENABLED_CATEGORIES);
+  // Validate categories. Unknown values are dropped with a warning
+  // rather than thrown — a typo shouldn't crash the server.
+  const validCategorySet = new Set<string>(CONSOLIDATED_CATEGORIES);
+  const validCategories: string[] = [];
+  for (const cat of enabledCategories) {
+    if (validCategorySet.has(cat)) {
+      validCategories.push(cat);
+    } else {
+      console.error(
+        `Warning: Unknown category "${cat}" in JIRA_ENABLED_CATEGORIES. ` +
+          `Valid categories: ${CONSOLIDATED_CATEGORIES.join(", ")}`,
+      );
+    }
+  }
+
+  // disabledActions are validated at runtime against the manifest in
+  // src/core/manifest.ts — config doesn't import operations.ts to
+  // avoid a heavy load-order coupling. Validation there surfaces
+  // unknown ops on first use.
+  const disabledActions = splitCsv(process.env.JIRA_DISABLED_ACTIONS);
+
+  return {
+    enabledCategories: validCategories,
+    disabledActions,
+  };
+}
+
 export function getConfig(): JiraConfig {
   const host = process.env.JIRA_HOST;
   const email = process.env.JIRA_EMAIL;
   const apiToken = process.env.JIRA_API_TOKEN;
   const cloudId = process.env.JIRA_CLOUD_ID;
   const toolMode = parseToolMode(process.env.JIRA_TOOL_MODE);
+  const toolFilter = parseToolFilter();
 
   const missing: string[] = [];
 
@@ -75,7 +162,9 @@ export function getConfig(): JiraConfig {
         "  JIRA_EMAIL    - Your Atlassian account email\n" +
         "  JIRA_API_TOKEN - API token from https://id.atlassian.com/manage-profile/security/api-tokens\n" +
         "  JIRA_CLOUD_ID  - (Optional) Cloud ID for scoped tokens, will be auto-fetched if not provided\n" +
-        "  JIRA_TOOL_MODE - (Optional) 'classic' (default) or 'code-api'"
+        "  JIRA_TOOL_MODE - (Optional) 'classic' (default) or 'code-api'\n" +
+        "  JIRA_ENABLED_CATEGORIES - (Optional) comma-separated tool categories (e.g. 'issue,search,comment'). Unset = all enabled.\n" +
+        "  JIRA_DISABLED_ACTIONS - (Optional) comma-separated manifest operation names (e.g. 'issue.delete,project.delete')."
     );
   }
 
@@ -91,6 +180,7 @@ export function getConfig(): JiraConfig {
     tokenType,
     cloudId,
     toolMode,
+    toolFilter,
   };
 }
 
