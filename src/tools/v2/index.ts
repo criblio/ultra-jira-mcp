@@ -59,9 +59,10 @@ const toolByName = new Map<string, ConsolidatedTool>();
 for (const t of allConsolidatedTools) toolByName.set(t.name, t);
 
 // MCP-shaped descriptors. The shape mirrors v1: { name, description,
-// inputSchema }. inputSchema is a JSON Schema with a oneOf over the
-// tool's actions — gives the agent a tight constraint on what can
-// land in args per action.
+// inputSchema }. inputSchema is a flat JSON Schema with `action` as a
+// string enum and a merged property bag — see buildInputSchema for
+// why it's flat (top-level oneOf isn't accepted by the Anthropic
+// tool-use API).
 export interface V2Tool {
   name: string;
   description: string;
@@ -87,8 +88,9 @@ function categoryOf(toolName: string): string {
 //     tool. Use `disabledActions` for the safety guarantee — it's
 //     enforced at the manifest dispatch layer in both modes.
 //   - Actions in `disabledActions` are stripped from each tool's
-//     `oneOf`, so the disabled action's schema doesn't bloat the
-//     tool listing. A tool with every action disabled is dropped.
+//     action set before buildInputSchema runs, so the disabled
+//     action's fields and description don't bloat the tool listing.
+//     A tool with every action disabled is dropped.
 export function getV2Tools(filter?: ToolFilterConfig): V2Tool[] {
   const enabled = filter?.enabledCategories ?? [];
   const disabled = new Set(filter?.disabledActions ?? []);

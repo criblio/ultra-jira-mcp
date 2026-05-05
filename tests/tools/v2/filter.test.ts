@@ -21,10 +21,12 @@ function emptyFilter(): ToolFilterConfig {
   return { enabledCategories: [], disabledActions: [] };
 }
 
-// Fish out a JSON Schema's `oneOf` so we can count remaining actions.
+// Fish out the action enum so we can count remaining actions.
 function actionsIn(tool: { inputSchema: unknown }): string[] {
-  const schema = tool.inputSchema as { oneOf?: Array<{ title?: string }> };
-  return (schema.oneOf ?? []).map((b) => b.title ?? "");
+  const schema = tool.inputSchema as {
+    properties?: { action?: { enum?: string[] } };
+  };
+  return schema.properties?.action?.enum ?? [];
 }
 
 describe("getV2Tools (no filter)", () => {
@@ -91,7 +93,7 @@ describe("getV2Tools enabledCategories filter", () => {
 });
 
 describe("getV2Tools disabledActions filter", () => {
-  it("strips disabled actions from a tool's oneOf without dropping the tool", () => {
+  it("strips disabled actions from a tool's action enum without dropping the tool", () => {
     const out = getV2Tools({
       enabledCategories: [],
       disabledActions: ["issue.delete"],

@@ -47,29 +47,116 @@ export interface ConsolidatedTool {
 
 // --- MCP-shaped JSON schema for the tool listing ----------------------
 
-// Build the input schema the MCP tool listing exposes. Uses oneOf so
-// the agent's tool-use renderer constrains output per action.
+// Build the input schema the MCP tool listing exposes.
+//
+// Shape: a flat object schema with `action` as a string enum and a
+// merged property bag containing every field across all actions. The
+// previous shape used a top-level `oneOf` over per-action branches,
+// which gave the agent tight per-action constraints — but the
+// Anthropic tool-use API rejects top-level oneOf/allOf/anyOf in
+// `input_schema`, so the consolidated v2 tools were unusable in
+// classic mode.
+//
+// The flattening means the JSON Schema no longer encodes "this field
+// is required only when action=X". That's enforced at runtime in
+// dispatchTool via the per-action Zod schema, so a malformed call
+// still fails fast — just after the call instead of at schema
+// validation. Per-action requirements are surfaced in the tool's
+// `description` so the agent still has the information it needs to
+// construct a valid call without trial-and-error.
 //
 // We don't go through zod-to-json-schema because (a) we want full
 // control over the wire shape, (b) it'd add a dep, and (c) the action
 // schemas are small enough that hand-shaped JSON is clearer.
 export function buildInputSchema(tool: ConsolidatedTool): unknown {
-  const oneOf: unknown[] = [];
+  // Per-field collected JSON Schemas keyed by field name. We collect
+  // every action's contribution so that fields whose type differs
+  // across actions (e.g. jira_issue.fields is a CSV string for `get`
+  // but a record for `create`) are surfaced as a oneOf at the
+  // property level instead of silently first-wins. Top-level oneOf
+  // is what the Anthropic API rejects; nested oneOf under a property
+  // is fine.
+  const collected: Record<string, unknown[]> = {};
+  const actionNames: string[] = [];
+  const perActionLines: string[] = [];
+
   for (const [actionName, def] of Object.entries(tool.actions)) {
-    oneOf.push({
-      type: "object",
-      title: actionName,
-      description: def.description,
-      properties: zodToProperties(def.schema, actionName),
-      required: zodRequired(def.schema, actionName),
-      additionalProperties: false,
-    });
+    actionNames.push(actionName);
+    const shape = zodShape(def.schema) ?? {};
+    const required: string[] = [];
+    const optional: string[] = [];
+    for (const [key, sub] of Object.entries(shape)) {
+      // Skip any per-action field literally named `action` — it
+      // would collide with the discriminator we add below. The
+      // dispatcher strips `action` from rawArgs before Zod
+      // validation, so an action schema declaring its own `action`
+      // field would be unreachable anyway. (jira_project.list has
+      // an `action` query param; this is the path that lets it
+      // coexist with the discriminator. The list action loses
+      // visibility of that param in the JSON Schema; agents can
+      // still pass it, additionalProperties:false is what blocks
+      // it — see below.)
+      if (key === "action") continue;
+      const js = zodFieldToJsonSchema(sub);
+      const seen = collected[key];
+      if (!seen) {
+        collected[key] = [js];
+      } else if (!seen.some((s) => deepEqual(s, js))) {
+        seen.push(js);
+      }
+      (isOptionalZod(sub) ? optional : required).push(key);
+    }
+    const parts: string[] = [];
+    if (required.length) parts.push(`requires ${required.join(", ")}`);
+    if (optional.length) parts.push(`optional ${optional.join(", ")}`);
+    const suffix = parts.length ? ` (${parts.join("; ")})` : "";
+    perActionLines.push(`- ${actionName}: ${def.description}${suffix}`);
   }
+
+  const merged: Record<string, unknown> = {};
+  for (const [key, variants] of Object.entries(collected)) {
+    merged[key] = variants.length === 1 ? variants[0] : { oneOf: variants };
+  }
+
+  const description = [tool.description, "Actions:", ...perActionLines].join("\n");
+
+  // Spread `merged` first so a (defensively-skipped) collision can
+  // never clobber the discriminator. additionalProperties is left
+  // permissive: per-action Zod validation in dispatchTool is the
+  // authoritative gate, and a strict top-level schema would reject
+  // legitimate per-action fields the merge couldn't represent
+  // (e.g. the `action` query param on jira_project.list).
   return {
     type: "object",
-    description: tool.description,
-    oneOf,
+    description,
+    properties: {
+      ...merged,
+      action: { type: "string", enum: actionNames },
+    },
+    required: ["action"],
+    additionalProperties: true,
   };
+}
+
+// Structural equality for the small JSON Schema fragments produced
+// by zodFieldToJsonSchema. Used to dedupe collected variants per
+// field — two actions with the same shape contribute one entry, two
+// with divergent shapes contribute a oneOf.
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null) return false;
+  if (typeof a !== "object") return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => deepEqual(v, b[i]));
+  }
+  if (Array.isArray(b)) return false;
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ak = Object.keys(ao);
+  const bk = Object.keys(bo);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => deepEqual(ao[k], bo[k]));
 }
 
 // Reflect over a Zod schema using its constructor names + _def
@@ -102,33 +189,6 @@ function zodShape(schema: ZodType): Record<string, ZodType> | undefined {
   return zodDef(schema).shape;
 }
 
-// Pull the property descriptors out of a Zod object schema and
-// inject `{ action: { const: <actionName> } }` so MCP's discriminator
-// works.
-function zodToProperties(schema: ZodType, actionName: string): Record<string, unknown> {
-  const props: Record<string, unknown> = {
-    action: { type: "string", const: actionName },
-  };
-  const shape = zodShape(schema);
-  if (shape) {
-    for (const [key, sub] of Object.entries(shape)) {
-      props[key] = zodFieldToJsonSchema(sub);
-    }
-  }
-  return props;
-}
-
-function zodRequired(schema: ZodType, _actionName: string): string[] {
-  const req = ["action"];
-  const shape = zodShape(schema);
-  if (shape) {
-    for (const [key, sub] of Object.entries(shape)) {
-      if (!isOptionalZod(sub)) req.push(key);
-    }
-  }
-  return req;
-}
-
 function isOptionalZod(schema: ZodType): boolean {
   const kind = zodKind(schema);
   return kind === "ZodOptional" || kind === "ZodDefault" || kind === "ZodNullable";
@@ -144,9 +204,17 @@ function unwrap(schema: ZodType): ZodType {
 }
 
 function zodFieldToJsonSchema(schema: ZodType): unknown {
+  // Zod 4 attaches `.describe()` metadata to whichever node it was
+  // called on. Our action schemas use `z.string().optional().describe(...)`
+  // (describe applied to the optional wrapper) far more often than
+  // the inverse, so prefer the outer description and fall back to
+  // the inner. Without this, every `.optional().describe()` field
+  // silently dropped its description from the emitted JSON Schema.
+  const outer = (schema as unknown as { description?: string }).description;
   const inner = unwrap(schema);
   const kind = zodKind(inner);
-  const description = (inner as unknown as { description?: string }).description;
+  const description =
+    outer ?? (inner as unknown as { description?: string }).description;
   const tail = description ? { description } : {};
   switch (kind) {
     case "ZodString":
