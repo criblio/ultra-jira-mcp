@@ -330,11 +330,11 @@ describe("invokeOperation", () => {
     });
     const result = (await invokeOperation(manifest, ctx.client, "issue.get", {
       key: "PROJ-1",
-    })) as { key: string; status?: string; descriptionPreview: string };
+    })) as { key: string; status?: string; description: string };
     // Trimmed shape: flat fields, no raw ADF tree.
     expect(result.key).toBe("PROJ-1");
     expect(result.status).toBe("To Do");
-    expect(result.descriptionPreview).toBe("");
+    expect(result.description).toBe("");
   });
 
   it("rawString bodyShape forwards the raw param value, not the wrapping object", async () => {

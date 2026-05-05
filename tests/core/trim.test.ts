@@ -63,7 +63,10 @@ describe("userSummary", () => {
 // --- Comment ------------------------------------------------------------
 
 describe("commentSummary", () => {
-  it("flattens ADF body and truncates beyond 300 chars", () => {
+  it("flattens ADF body to plain text without truncating", () => {
+    // Earlier v2 capped comment bodies at 300 chars, but classic
+    // mode has no fallback to the full body, so the cap silently
+    // dropped content. Now we keep the full plain-text body.
     const longText = "x".repeat(400);
     const c: JiraComment = {
       id: "10001",
@@ -78,8 +81,8 @@ describe("commentSummary", () => {
     const s = commentSummary(c);
     expect(s.id).toBe("10001");
     expect(s.author?.displayName).toBe("Author");
-    expect(s.preview.endsWith("…")).toBe(true);
-    expect(s.preview.length).toBe(301);
+    expect(s.body.length).toBe(400);
+    expect(s.body.endsWith("…")).toBe(false);
   });
 });
 
@@ -152,7 +155,7 @@ function makeIssue(overrides: Partial<JiraIssue["fields"]> = {}): JiraIssue {
 }
 
 describe("issueSummary", () => {
-  it("produces a compact projection for a normal issue", () => {
+  it("produces a content-preserving projection for a normal issue", () => {
     const s = issueSummary(makeIssue());
     expect(s).toMatchObject({
       key: "PROJ-1",
@@ -161,25 +164,28 @@ describe("issueSummary", () => {
       status: "To Do",
       priority: "High",
       labels: ["frontend"],
-      descriptionPreview: "short description",
-      descriptionTruncated: false,
+      description: "short description",
       commentCount: 0,
-      recentComments: [],
+      comments: [],
       attachmentCount: 0,
+      subtasks: [],
+      issuelinks: [],
     });
     expect(s.assignee?.displayName).toBe("Dev");
     expect(s.reporter?.displayName).toBe("Reporter");
   });
 
-  it("truncates long descriptions at 500 chars and marks truncated", () => {
-    const long = "a".repeat(600);
+  it("keeps the full description even when long", () => {
+    // Earlier v2 capped the description at 500 chars; in classic
+    // mode the truncated bytes had no recovery path, so the agent
+    // silently lost content. Now we keep the full body.
+    const long = "a".repeat(2000);
     const s = issueSummary(makeIssue({ description: adfDoc(long) }));
-    expect(s.descriptionTruncated).toBe(true);
-    expect(s.descriptionPreview.length).toBe(501);
-    expect(s.descriptionPreview.endsWith("…")).toBe(true);
+    expect(s.description.length).toBe(2000);
+    expect(s.description.endsWith("…")).toBe(false);
   });
 
-  it("keeps only the last 3 comments but reports the full count", () => {
+  it("inlines every comment with the full body", () => {
     const comments: JiraComment[] = Array.from({ length: 10 }, (_, i) => ({
       id: String(i),
       body: adfDoc(`comment ${i}`),
@@ -192,7 +198,62 @@ describe("issueSummary", () => {
       }),
     );
     expect(s.commentCount).toBe(10);
-    expect(s.recentComments.map((c) => c.id)).toEqual(["7", "8", "9"]);
+    expect(s.comments.map((c) => c.id)).toEqual(
+      ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    );
+    expect(s.comments[0].body).toBe("comment 0");
+  });
+
+  it("surfaces issuelinks with direction-specific relationship phrasing", () => {
+    const s = issueSummary(
+      makeIssue({
+        issuelinks: [
+          {
+            id: "L1",
+            type: { id: "10000", name: "Blocks", inward: "is blocked by", outward: "blocks" },
+            outwardIssue: { id: "20", key: "PROJ-2", fields: { summary: "Other" } },
+          },
+          {
+            id: "L2",
+            type: { id: "10000", name: "Blocks", inward: "is blocked by", outward: "blocks" },
+            inwardIssue: { id: "30", key: "PROJ-3", fields: { summary: "Upstream" } },
+          },
+        ],
+      }),
+    );
+    expect(s.issuelinks).toEqual([
+      {
+        id: "L1",
+        type: "Blocks",
+        direction: "outward",
+        relationship: "blocks",
+        issue: { key: "PROJ-2", summary: "Other" },
+      },
+      {
+        id: "L2",
+        type: "Blocks",
+        direction: "inward",
+        relationship: "is blocked by",
+        issue: { key: "PROJ-3", summary: "Upstream" },
+      },
+    ]);
+  });
+
+  it("surfaces subtasks and parent", () => {
+    const s = issueSummary(
+      makeIssue({
+        parent: { id: "5", key: "PROJ-5", fields: { summary: "Parent epic" } } as unknown as { id: string; key: string },
+        subtasks: [
+          { id: "11", key: "PROJ-11", fields: { summary: "First sub" } },
+          { id: "12", key: "PROJ-12", fields: { summary: "Second sub" } },
+        ],
+      }),
+    );
+    expect(s.parent).toEqual({ id: "5", key: "PROJ-5", summary: "Parent epic" });
+    expect(s.subtasks).toEqual([
+      { id: "11", key: "PROJ-11", summary: "First sub" },
+      { id: "12", key: "PROJ-12", summary: "Second sub" },
+    ]);
   });
 
   it("summarizes attachments", () => {

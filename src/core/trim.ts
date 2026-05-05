@@ -16,14 +16,9 @@ import type {
   JiraUser,
 } from "../types/jira.js";
 
-const DESCRIPTION_PREVIEW_CHARS = 500;
-const COMMENT_PREVIEW_CHARS = 300;
-const RECENT_COMMENT_COUNT = 3;
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return `${s.slice(0, max)}…`;
-}
+// (Description and comment caps were removed — see issueSummary.
+// Classic mode has no sandbox-on-disk fallback, so any cap silently
+// drops content the agent can't recover.)
 
 // --- User ---------------------------------------------------------------
 
@@ -51,7 +46,7 @@ export interface CommentSummary {
   author: UserSummary | null;
   created: string;
   updated: string;
-  preview: string;
+  body: string;
 }
 
 export const commentSummary = (c: JiraComment): CommentSummary => ({
@@ -59,7 +54,7 @@ export const commentSummary = (c: JiraComment): CommentSummary => ({
   author: userSummary(c.author),
   created: c.created,
   updated: c.updated,
-  preview: truncate(adfToPlainText(c.body), COMMENT_PREVIEW_CHARS),
+  body: adfToPlainText(c.body),
 });
 
 // --- Attachment ---------------------------------------------------------
@@ -96,6 +91,31 @@ export const projectSummary = (p: JiraProject): ProjectSummary => ({
 
 // --- Issue --------------------------------------------------------------
 
+export interface IssueLinkSummary {
+  id: string;
+  type: string;
+  // "inward" or "outward" — the direction relative to *this* issue.
+  direction: "inward" | "outward";
+  // The semantic relationship from this issue's POV (e.g. "blocks",
+  // "is blocked by"). Jira stores both phrasings on the link type;
+  // surfacing the one that matches `direction` lets the agent read
+  // the relationship without consulting docs.
+  relationship: string;
+  issue: { key: string; summary?: string };
+}
+
+export interface SubtaskSummary {
+  id: string;
+  key: string;
+  summary: string;
+}
+
+export interface ParentSummary {
+  id: string;
+  key: string;
+  summary?: string;
+}
+
 export interface IssueSummary {
   key: string;
   id: string;
@@ -107,18 +127,44 @@ export interface IssueSummary {
   labels: string[];
   created?: string;
   updated?: string;
-  descriptionPreview: string;
-  descriptionTruncated: boolean;
+  // Full plain-text description. Was capped at 500 chars in earlier
+  // v2 (and the truncated bytes had no recovery path in classic mode
+  // since classic doesn't sandbox the raw response). Kept whole now.
+  description: string;
+  parent?: ParentSummary;
+  subtasks: SubtaskSummary[];
+  issuelinks: IssueLinkSummary[];
   commentCount: number;
-  recentComments: CommentSummary[];
+  comments: CommentSummary[];
   attachmentCount: number;
   attachments: AttachmentSummary[];
 }
 
+function issueLinkSummary(l: {
+  id: string;
+  type: { name: string; inward: string; outward: string };
+  inwardIssue?: { id: string; key: string; fields?: { summary: string } };
+  outwardIssue?: { id: string; key: string; fields?: { summary: string } };
+}): IssueLinkSummary {
+  const direction: "inward" | "outward" = l.inwardIssue ? "inward" : "outward";
+  const linked = l.inwardIssue ?? l.outwardIssue;
+  return {
+    id: l.id,
+    type: l.type.name,
+    direction,
+    relationship: direction === "inward" ? l.type.inward : l.type.outward,
+    issue: {
+      key: linked?.key ?? "",
+      summary: linked?.fields?.summary,
+    },
+  };
+}
+
 export const issueSummary = (i: JiraIssue): IssueSummary => {
-  const desc = adfToPlainText(i.fields.description);
   const comments = i.fields.comment?.comments ?? [];
   const attachments = i.fields.attachment ?? [];
+  const subtasks = i.fields.subtasks ?? [];
+  const links = i.fields.issuelinks ?? [];
   return {
     key: i.key,
     id: i.id,
@@ -130,10 +176,25 @@ export const issueSummary = (i: JiraIssue): IssueSummary => {
     labels: i.fields.labels ?? [],
     created: i.fields.created,
     updated: i.fields.updated,
-    descriptionPreview: truncate(desc, DESCRIPTION_PREVIEW_CHARS),
-    descriptionTruncated: desc.length > DESCRIPTION_PREVIEW_CHARS,
+    description: adfToPlainText(i.fields.description),
+    parent: i.fields.parent
+      ? {
+          id: i.fields.parent.id,
+          key: i.fields.parent.key,
+          // The /issue/{key} response includes `parent.fields.summary`
+          // when the parent is populated; older shapes lack `fields`.
+          summary: (i.fields.parent as { fields?: { summary?: string } })
+            .fields?.summary,
+        }
+      : undefined,
+    subtasks: subtasks.map((s) => ({
+      id: s.id,
+      key: s.key,
+      summary: s.fields.summary,
+    })),
+    issuelinks: links.map(issueLinkSummary),
     commentCount: i.fields.comment?.total ?? comments.length,
-    recentComments: comments.slice(-RECENT_COMMENT_COUNT).map(commentSummary),
+    comments: comments.map(commentSummary),
     attachmentCount: attachments.length,
     attachments: attachments.map(attachmentSummary),
   };

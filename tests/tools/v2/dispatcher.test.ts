@@ -56,6 +56,16 @@ const fixtureManifest: Manifest = [
     pathTemplate: "/x",
     params: [{ name: "name", role: "body", required: true }],
   },
+  {
+    name: "fx.list",
+    description: "",
+    verb: "GET",
+    pathTemplate: "/x",
+    params: [],
+    // Use bareList so the test can distinguish trimmed (count
+    // wrapper) from raw (the underlying array).
+    trim: "bareList",
+  },
 ];
 
 const fixtureTool: ConsolidatedTool = {
@@ -76,6 +86,11 @@ const fixtureTool: ConsolidatedTool = {
         name: z.string(),
       }),
       operation: "fx.create",
+    },
+    list: {
+      description: "List many",
+      schema: z.object({}),
+      operation: "fx.list",
     },
   },
 };
@@ -132,6 +147,55 @@ describe("dispatchTool", () => {
     });
   });
 
+  it("applies the trim projection by default", async () => {
+    // bareList collapses an array to {count, truncated}. Without
+    // `full`, the dispatcher must surface the trimmed shape.
+    const ctx = makeMockClient();
+    ctx.setReturn([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    const result = await dispatchTool(fixtureTool, fixtureManifest, ctx.client, {
+      action: "list",
+    });
+    expect(result).toEqual({ count: 3, truncated: true });
+  });
+
+  it("returns the raw response when `full: true` is passed", async () => {
+    // The escape hatch: agent opts into the un-trimmed body when the
+    // summary drops content it needs. `full` is a meta-arg the
+    // dispatcher peels off before per-action Zod validation, so it
+    // works on every consolidated tool without per-action plumbing.
+    const ctx = makeMockClient();
+    const raw = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    ctx.setReturn(raw);
+    const result = await dispatchTool(fixtureTool, fixtureManifest, ctx.client, {
+      action: "list",
+      full: true,
+    });
+    expect(result).toEqual(raw);
+  });
+
+  it("treats `full: false` and a missing `full` identically (still trimmed)", async () => {
+    const ctx = makeMockClient();
+    ctx.setReturn([{ id: "a" }]);
+    const result = await dispatchTool(fixtureTool, fixtureManifest, ctx.client, {
+      action: "list",
+      full: false,
+    });
+    expect(result).toEqual({ count: 1, truncated: true });
+  });
+
+  it("does not pass `full` through to the underlying request", async () => {
+    // Otherwise Jira would receive ?full=true as a query param.
+    const ctx = makeMockClient();
+    ctx.setReturn([]);
+    await dispatchTool(fixtureTool, fixtureManifest, ctx.client, {
+      action: "list",
+      full: true,
+    });
+    expect(ctx.calls[0]).toMatchObject({ api: "get", path: "/x" });
+    const query = (ctx.calls[0] as { query?: Record<string, unknown> }).query;
+    expect(query ?? {}).not.toHaveProperty("full");
+  });
+
   it("wraps OperationError as ToolError so callers see a tool-shaped failure", async () => {
     const ctx = makeMockClient();
     // Operation that doesn't exist — invokeOperation throws OperationError.
@@ -177,13 +241,26 @@ describe("buildInputSchema", () => {
     expect(schema.allOf).toBeUndefined();
     expect(schema.anyOf).toBeUndefined();
     expect(schema.properties.action.type).toBe("string");
-    expect(schema.properties.action.enum.sort()).toEqual(["create", "get"]);
+    expect(schema.properties.action.enum.sort()).toEqual(["create", "get", "list"]);
     expect(schema.required).toEqual(["action"]);
     // Permissive: per-action Zod validation is the authoritative gate
     // and strips unknowns. A strict top-level schema would reject
     // per-action fields the merge couldn't represent (e.g. an action
     // schema declaring its own `action`-named query param).
     expect(schema.additionalProperties).toBe(true);
+  });
+
+  it("exposes the `full` meta-arg on every tool's schema", () => {
+    // Agents need to see `full` in the schema to discover the
+    // bypass-trim escape hatch. Per-action plumbing isn't needed —
+    // dispatcher handles it once for every tool.
+    const schema = buildInputSchema(fixtureTool) as {
+      properties: { full?: { type?: string; description?: string } };
+      description: string;
+    };
+    expect(schema.properties.full?.type).toBe("boolean");
+    expect(schema.properties.full?.description).toMatch(/raw Jira API/);
+    expect(schema.description).toMatch(/full: true/);
   });
 
   it("merges fields from all actions into a single property bag", () => {

@@ -19,6 +19,7 @@ import { z, ZodError, type ZodType } from "zod";
 import type { JiraClient } from "../../auth/jira-client.js";
 import {
   invokeOperation,
+  invokeOperationRaw,
   OperationError,
   type Manifest,
 } from "../../core/manifest.js";
@@ -118,7 +119,12 @@ export function buildInputSchema(tool: ConsolidatedTool): unknown {
     merged[key] = variants.length === 1 ? variants[0] : { oneOf: variants };
   }
 
-  const description = [tool.description, "Actions:", ...perActionLines].join("\n");
+  const description = [
+    tool.description,
+    "Actions:",
+    ...perActionLines,
+    "Pass `full: true` to bypass the summary projection and return the raw Jira API response. Useful when the default summary drops content you need.",
+  ].join("\n");
 
   // Spread `merged` first so a (defensively-skipped) collision can
   // never clobber the discriminator. additionalProperties is left
@@ -132,6 +138,11 @@ export function buildInputSchema(tool: ConsolidatedTool): unknown {
     properties: {
       ...merged,
       action: { type: "string", enum: actionNames },
+      full: {
+        type: "boolean",
+        description:
+          "If true, skip the summary projection and return the raw Jira API response.",
+      },
     },
     required: ["action"],
     additionalProperties: true,
@@ -267,6 +278,14 @@ export class ToolError extends Error {
 
 const ActionKeySchema = z.object({ action: z.string() }).passthrough();
 
+// Meta-arg the dispatcher peels off before per-action Zod validation.
+// `full: true` skips the trim projection so the agent gets the raw
+// Jira API response — the escape hatch for actions whose summary
+// drops content the agent needs (e.g. `comment.list` returns just a
+// count by default; `full: true` returns every comment body).
+const FullFlagSchema = z.object({ full: z.boolean().optional() }).passthrough();
+export const FULL_META_KEY = "full";
+
 export async function dispatchTool(
   tool: ConsolidatedTool,
   manifest: Manifest,
@@ -298,10 +317,19 @@ export async function dispatchTool(
     );
   }
 
+  // Peel off the `full` meta-arg before per-action Zod validation.
+  // `full: true` skips the trim projection so callers can opt into
+  // the raw Jira response when the trimmed shape drops content they
+  // need. We strip it here (not in the action schemas) so every
+  // trimmed action gets the escape hatch automatically — see
+  // FullFlagSchema above for the rationale.
+  const fullParsed = FullFlagSchema.safeParse(rawArgs);
+  const wantFull = fullParsed.success && fullParsed.data.full === true;
+
   // Validate the rest of the args against this action's schema.
-  // Drop `action` from the input first so it doesn't show up in
-  // strict schemas as an unknown field.
-  const { action: _drop, ...rest } = rawArgs;
+  // Drop `action` and `full` from the input first so they don't show
+  // up in strict schemas as unknown fields.
+  const { action: _drop, [FULL_META_KEY]: _drop2, ...rest } = rawArgs;
   const validated = def.schema.safeParse(rest);
   if (!validated.success) {
     throw new ToolError(
@@ -313,6 +341,16 @@ export async function dispatchTool(
   }
 
   try {
+    if (wantFull) {
+      const { response } = await invokeOperationRaw(
+        manifest,
+        client,
+        def.operation,
+        validated.data as Record<string, unknown>,
+        disabledActions,
+      );
+      return response;
+    }
     return await invokeOperation(
       manifest,
       client,
