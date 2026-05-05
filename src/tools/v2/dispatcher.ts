@@ -69,7 +69,14 @@ export interface ConsolidatedTool {
 // control over the wire shape, (b) it'd add a dep, and (c) the action
 // schemas are small enough that hand-shaped JSON is clearer.
 export function buildInputSchema(tool: ConsolidatedTool): unknown {
-  const merged: Record<string, unknown> = {};
+  // Per-field collected JSON Schemas keyed by field name. We collect
+  // every action's contribution so that fields whose type differs
+  // across actions (e.g. jira_issue.fields is a CSV string for `get`
+  // but a record for `create`) are surfaced as a oneOf at the
+  // property level instead of silently first-wins. Top-level oneOf
+  // is what the Anthropic API rejects; nested oneOf under a property
+  // is fine.
+  const collected: Record<string, unknown[]> = {};
   const actionNames: string[] = [];
   const perActionLines: string[] = [];
 
@@ -79,7 +86,24 @@ export function buildInputSchema(tool: ConsolidatedTool): unknown {
     const required: string[] = [];
     const optional: string[] = [];
     for (const [key, sub] of Object.entries(shape)) {
-      if (!(key in merged)) merged[key] = zodFieldToJsonSchema(sub);
+      // Skip any per-action field literally named `action` — it
+      // would collide with the discriminator we add below. The
+      // dispatcher strips `action` from rawArgs before Zod
+      // validation, so an action schema declaring its own `action`
+      // field would be unreachable anyway. (jira_project.list has
+      // an `action` query param; this is the path that lets it
+      // coexist with the discriminator. The list action loses
+      // visibility of that param in the JSON Schema; agents can
+      // still pass it, additionalProperties:false is what blocks
+      // it — see below.)
+      if (key === "action") continue;
+      const js = zodFieldToJsonSchema(sub);
+      const seen = collected[key];
+      if (!seen) {
+        collected[key] = [js];
+      } else if (!seen.some((s) => deepEqual(s, js))) {
+        seen.push(js);
+      }
       (isOptionalZod(sub) ? optional : required).push(key);
     }
     const parts: string[] = [];
@@ -89,18 +113,50 @@ export function buildInputSchema(tool: ConsolidatedTool): unknown {
     perActionLines.push(`- ${actionName}: ${def.description}${suffix}`);
   }
 
+  const merged: Record<string, unknown> = {};
+  for (const [key, variants] of Object.entries(collected)) {
+    merged[key] = variants.length === 1 ? variants[0] : { oneOf: variants };
+  }
+
   const description = [tool.description, "Actions:", ...perActionLines].join("\n");
 
+  // Spread `merged` first so a (defensively-skipped) collision can
+  // never clobber the discriminator. additionalProperties is left
+  // permissive: per-action Zod validation in dispatchTool is the
+  // authoritative gate, and a strict top-level schema would reject
+  // legitimate per-action fields the merge couldn't represent
+  // (e.g. the `action` query param on jira_project.list).
   return {
     type: "object",
     description,
     properties: {
-      action: { type: "string", enum: actionNames },
       ...merged,
+      action: { type: "string", enum: actionNames },
     },
     required: ["action"],
-    additionalProperties: false,
+    additionalProperties: true,
   };
+}
+
+// Structural equality for the small JSON Schema fragments produced
+// by zodFieldToJsonSchema. Used to dedupe collected variants per
+// field — two actions with the same shape contribute one entry, two
+// with divergent shapes contribute a oneOf.
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null) return false;
+  if (typeof a !== "object") return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => deepEqual(v, b[i]));
+  }
+  if (Array.isArray(b)) return false;
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ak = Object.keys(ao);
+  const bk = Object.keys(bo);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => deepEqual(ao[k], bo[k]));
 }
 
 // Reflect over a Zod schema using its constructor names + _def

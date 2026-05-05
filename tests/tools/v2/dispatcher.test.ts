@@ -9,6 +9,7 @@ import {
   ToolError,
   type ConsolidatedTool,
 } from "../../../src/tools/v2/dispatcher.js";
+import { getV2Tools } from "../../../src/tools/v2/index.js";
 
 // --- Mock infra --------------------------------------------------------
 
@@ -178,7 +179,11 @@ describe("buildInputSchema", () => {
     expect(schema.properties.action.type).toBe("string");
     expect(schema.properties.action.enum.sort()).toEqual(["create", "get"]);
     expect(schema.required).toEqual(["action"]);
-    expect(schema.additionalProperties).toBe(false);
+    // Permissive: per-action Zod validation is the authoritative gate
+    // and strips unknowns. A strict top-level schema would reject
+    // per-action fields the merge couldn't represent (e.g. an action
+    // schema declaring its own `action`-named query param).
+    expect(schema.additionalProperties).toBe(true);
   });
 
   it("merges fields from all actions into a single property bag", () => {
@@ -240,5 +245,104 @@ describe("buildInputSchema", () => {
       items: { type: "string" },
     });
     expect(picky?.oneOf?.[2]).toEqual({ type: "number" });
+  });
+
+  it("emits a property-level oneOf when a field has different types across actions", () => {
+    // Regression: jira_issue.fields is z.string() in `get` (CSV
+    // list) but z.record(...) in `create`/`update`/`transition`.
+    // The original flat-merge took first-wins, so create/update
+    // saw `{ type: "string" }` and the agent would send a string
+    // that failed Zod validation. Property-level oneOf lets the
+    // agent see both variants.
+    const tool: ConsolidatedTool = {
+      name: "jira_collide",
+      description: "",
+      actions: {
+        get: {
+          description: "",
+          schema: z.object({ fields: z.string().optional() }),
+          operation: "fx.get",
+        },
+        create: {
+          description: "",
+          schema: z.object({
+            fields: z.record(z.string(), z.unknown()),
+          }),
+          operation: "fx.create",
+        },
+      },
+    };
+    const schema = buildInputSchema(tool) as {
+      properties: { fields: { oneOf?: Array<{ type?: string }> } };
+    };
+    const fields = schema.properties.fields;
+    expect(fields.oneOf).toBeDefined();
+    const types = fields.oneOf!.map((v) => v.type).sort();
+    expect(types).toEqual(["object", "string"]);
+  });
+
+  it("does not let an action-named field clobber the discriminator", () => {
+    // Regression: jira_project.list has `action: z.string().optional()`
+    // (a Jira API filter param). The original spread put the
+    // discriminator first and `...merged` last, so merged.action
+    // overwrote the enum. Now merged is spread first AND `action`
+    // is skipped during merge — the discriminator must survive
+    // intact.
+    const tool: ConsolidatedTool = {
+      name: "jira_collide_action",
+      description: "",
+      actions: {
+        list: {
+          description: "",
+          schema: z.object({
+            action: z.string().optional(),
+            query: z.string().optional(),
+          }),
+          operation: "fx.get",
+        },
+        get: {
+          description: "",
+          schema: z.object({ id: z.string() }),
+          operation: "fx.get",
+        },
+      },
+    };
+    const schema = buildInputSchema(tool) as {
+      properties: {
+        action: { type: string; enum?: string[] };
+        query?: unknown;
+      };
+    };
+    expect(schema.properties.action.type).toBe("string");
+    expect(schema.properties.action.enum?.sort()).toEqual(["get", "list"]);
+  });
+});
+
+// --- Real-tool invariants ---------------------------------------------
+//
+// Loop over every consolidated v2 tool and assert the schema
+// invariants the Anthropic tool-use API requires. The synthetic
+// fixtureTool above can't catch tool-specific collisions; this
+// integration-style sweep does.
+
+describe("buildInputSchema across all consolidated tools", () => {
+  it("emits no top-level oneOf/allOf/anyOf and a real action enum for any tool", () => {
+    for (const tool of getV2Tools()) {
+      const schema = tool.inputSchema as Record<string, unknown> & {
+        properties?: { action?: { type?: string; enum?: string[] } };
+      };
+      expect(schema.oneOf, `${tool.name} top-level oneOf`).toBeUndefined();
+      expect(schema.allOf, `${tool.name} top-level allOf`).toBeUndefined();
+      expect(schema.anyOf, `${tool.name} top-level anyOf`).toBeUndefined();
+
+      const action = schema.properties?.action;
+      expect(action?.type, `${tool.name} action discriminator type`).toBe(
+        "string",
+      );
+      expect(
+        Array.isArray(action?.enum) && action!.enum!.length > 0,
+        `${tool.name} action enum non-empty`,
+      ).toBe(true);
+    }
   });
 });
