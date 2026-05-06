@@ -1,29 +1,38 @@
 #!/usr/bin/env node
-// jira-cli — thin shell client for the code-api bridge.
+// jira-cli — shell client for Jira. Parses argv into a flat args
+// bag, dispatches one operation, prints the trimmed summary as JSON
+// followed by a `ref: /path` line pointing at the full response on
+// disk so the caller can `cat` it for detail.
 //
-// Replaces the pre-built TypeScript stubs that earlier versions of
-// code-api shipped. The agent calls this binary from Bash; it parses
-// argv into a flat args bag, opens JIRA_MCP_SOCKET, sends one bridge
-// request, and prints the trimmed summary as JSON. The full response
-// path (the bridge's on-disk Ref) is appended on a final line so the
-// agent can `cat` or read it when it needs detail beyond the summary.
+// Two dispatch paths, auto-selected from the environment:
 //
-// Why a CLI rather than TS stubs:
+//   - bridge mode (JIRA_MCP_SOCKET set): forward the call over the
+//     IPC bridge to a running jira-mcp server. This is what the MCP
+//     code-api flow sets up — the server holds the JiraClient and
+//     handles auth.
+//   - direct mode (JIRA_MCP_SOCKET unset): read JIRA_HOST /
+//     JIRA_EMAIL / JIRA_API_TOKEN from env, build a JiraClient
+//     in-process, dispatch through the same trim + sandbox helper
+//     the bridge uses on the server side. No MCP server required.
+//
+// Why a CLI rather than TS stubs (replaced earlier code-api shape):
 //   - The stubs required `npx tsx -e ...` which has two persistent
 //     traps (top-level await unsupported under CJS; tsx's .js → .ts
 //     resolver skips paths under /node_modules/). Both manifested
 //     in real first-use sessions.
 //   - The agent already lives in Bash. Removing the TS runtime
-//     collapses the call chain to Bash → binary → IPC.
-//   - All client-side stub code was pure passthrough — no URL
-//     building, no header injection — so dropping the runtime
-//     layer costs nothing.
+//     collapses the call chain to Bash → binary → IPC (or Bash →
+//     binary → Jira HTTP, in direct mode).
+//   - All client-side stub code was pure passthrough, so dropping
+//     the runtime layer costs nothing.
 
 import * as net from "node:net";
 import * as fs from "node:fs/promises";
 
 import { operations } from "../core/operations.js";
 import type { Operation, ParamSpec } from "../core/manifest.js";
+import { callDirect } from "./direct.js";
+import { installSkill, SKILL_CONTENT } from "./install-skill.js";
 
 // --- Argv parsing ------------------------------------------------------
 
@@ -47,10 +56,12 @@ interface ParsedArgv {
 //   --key=-              → flags.key = (read all of stdin)
 //   --key=value --key=2  → flags.key = ["value", "2"]
 //
-// Boolean flags (--foo with no value) aren't supported; every
-// operation param the manifest declares carries a value, so a bare
-// --flag is almost certainly a mistake — surface it with an error
-// rather than silently coercing to "true".
+// Operation flags must carry a value — every manifest param does, so
+// a bare `--flag` for an op is almost certainly a typo and we error.
+// A small allowlist of *boolean* flag names (force, print) is
+// recognized for meta-commands like `install-skill`; bare presence
+// stores `""` and callers check existence via `key in flags`.
+const BOOLEAN_FLAG_NAMES = new Set(["force", "print"]);
 async function parseArgv(argv: readonly string[]): Promise<ParsedArgv> {
   const out: ParsedArgv = { command: "", flags: {}, help: false };
   let positional: string | null = null;
@@ -75,11 +86,16 @@ async function parseArgv(argv: readonly string[]): Promise<ParsedArgv> {
     } else {
       key = a.slice(2);
       const next = argv[i + 1];
-      if (next === undefined || next.startsWith("--")) {
+      const lookahead = next === undefined || next.startsWith("--");
+      if (lookahead && BOOLEAN_FLAG_NAMES.has(key)) {
+        // Bare boolean meta flag — store presence, no value to consume.
+        value = "";
+      } else if (lookahead) {
         throw new Error(`Flag --${key} expects a value (use --${key}=value or --${key} value).`);
+      } else {
+        value = next;
+        i++;
       }
-      value = next;
-      i++;
     }
     if (!key) throw new Error(`Empty flag name in argument: ${a}`);
     const resolved = await resolveValue(value);
@@ -134,12 +150,20 @@ function topLevelHelp(): string {
     byCategory.set(cat, list);
   }
   const lines: string[] = [
-    "jira-cli — call Jira operations over the code-api bridge.",
+    "jira-cli — call Jira operations from a shell.",
+    "",
+    "Two modes (auto-selected from env):",
+    "  bridge   JIRA_MCP_SOCKET set → forward to a running jira-mcp server.",
+    "  direct   JIRA_MCP_SOCKET unset → read JIRA_HOST/JIRA_EMAIL/",
+    "           JIRA_API_TOKEN from env (or .env.local) and call Jira",
+    "           directly. No server required.",
     "",
     "Usage:",
-    "  JIRA_MCP_SOCKET=<addr> jira-cli <op> [--flag=value ...]",
+    "  jira-cli <op> [--flag=value ...]",
     "  jira-cli <op> --help          show args for one operation",
     "  jira-cli --help               show this listing",
+    "  jira-cli install-skill        install a Claude Code skill so",
+    "                                agents discover this CLI",
     "",
     "Flag forms:",
     "  --key=value         --key value         --key=@/path/to/file",
@@ -271,6 +295,72 @@ function parseSocketAddress(address: string): net.Socket {
   return net.connect({ path: address });
 }
 
+// --- Meta commands ----------------------------------------------------
+
+// `jira-cli install-skill` writes ~/.claude/skills/jira/SKILL.md so
+// the agent can discover the CLI in standalone (no-MCP) sessions.
+// Flags:
+//   --force   overwrite an existing SKILL.md
+//   --print   dump rendered content to stdout (no write)
+async function runInstallSkill(parsed: ParsedArgv): Promise<number> {
+  if (parsed.help) {
+    process.stdout.write(
+      [
+        "jira-cli install-skill — install a Claude Code skill that",
+        "teaches the agent how to call this CLI.",
+        "",
+        "Writes ~/.claude/skills/jira/SKILL.md. Once installed, the",
+        "skill loads on demand whenever the user mentions Jira.",
+        "",
+        "Flags:",
+        "  --force    overwrite an existing SKILL.md",
+        "  --print    print the rendered SKILL.md to stdout (no write)",
+        "",
+      ].join("\n"),
+    );
+    return 0;
+  }
+
+  const known = new Set(["force", "print"]);
+  const unknown = Object.keys(parsed.flags).filter((k) => !known.has(k));
+  if (unknown.length > 0) {
+    process.stderr.write(
+      `jira-cli: unknown flag(s) for install-skill: ${unknown.join(", ")}.\n`,
+    );
+    return 2;
+  }
+
+  // The flag parser stores values as strings; `--force` / `--print`
+  // are booleans here. We accept any present-and-not-empty value
+  // (the parser rejects bare `--flag` already), so the existence of
+  // the key is enough.
+  const force = "force" in parsed.flags;
+  const print = "print" in parsed.flags;
+
+  if (print) {
+    process.stdout.write(SKILL_CONTENT);
+    return 0;
+  }
+
+  const result = await installSkill({ force });
+  switch (result.action) {
+    case "wrote":
+      process.stdout.write(`Wrote ${result.path}\n`);
+      return 0;
+    case "overwrote":
+      process.stdout.write(`Overwrote ${result.path}\n`);
+      return 0;
+    case "exists":
+      process.stderr.write(
+        `${result.path} already exists. Use --force to overwrite, or --print to dump the new content to stdout.\n`,
+      );
+      return 1;
+    case "printed":
+      // Unreachable — print branch returned earlier.
+      return 0;
+  }
+}
+
 // --- Main -------------------------------------------------------------
 
 async function main(): Promise<number> {
@@ -289,6 +379,12 @@ async function main(): Promise<number> {
   if (parsed.command === "") {
     process.stderr.write("jira-cli: missing operation. Try `jira-cli --help`.\n");
     return 2;
+  }
+
+  // Meta-commands (no Jira call): handle before the manifest lookup
+  // so unknown-flag pre-flight doesn't reject their flags.
+  if (parsed.command === "install-skill") {
+    return runInstallSkill(parsed);
   }
 
   const op = operations.find((o) => o.name === parsed.command);
@@ -318,17 +414,24 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  // Two modes:
+  //   - bridge mode: JIRA_MCP_SOCKET points at a running jira-mcp
+  //     server. Forward every call over IPC. This is what the MCP
+  //     `jira_code_api` tool sets up.
+  //   - direct mode: no socket → build a JiraClient in-process,
+  //     read JIRA_HOST/EMAIL/API_TOKEN from env, dispatch locally.
+  //     Same trim + ref behaviour, no server required.
   const address = process.env.JIRA_MCP_SOCKET;
-  if (!address) {
-    process.stderr.write(
-      "jira-cli: JIRA_MCP_SOCKET is not set. Run via the MCP tool's usage example, or export the address printed by jira_code_api.\n",
-    );
-    return 2;
-  }
-
   let result: BridgeResult;
   try {
-    result = await callBridge(address, op.name, parsed.flags);
+    if (address) {
+      result = await callBridge(address, op.name, parsed.flags);
+    } else {
+      // SandboxResult is a superset of BridgeResult (carries the same
+      // ref + summary; adds hash/fullSize/fetchedAt). Cast is safe;
+      // we only print summary + ref, never the bookkeeping fields.
+      result = (await callDirect(op.name, parsed.flags)) as BridgeResult;
+    }
   } catch (err) {
     process.stderr.write(`jira-cli: ${(err as Error).name}: ${(err as Error).message}\n`);
     return 1;
