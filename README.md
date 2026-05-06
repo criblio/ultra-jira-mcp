@@ -26,7 +26,7 @@ Set these environment variables on the server process. With Claude Desktop or Cl
 | `JIRA_EMAIL` | Atlassian account email | Yes |
 | `JIRA_API_TOKEN` | API token from [Atlassian Account Settings](https://id.atlassian.com/manage-profile/security/api-tokens) | Yes |
 | `JIRA_CLOUD_ID` | Cloud ID for scoped (ATATT/ATSTT) tokens; auto-fetched if omitted | No |
-| `JIRA_TOOL_MODE` | `"classic"` (default — 16 consolidated tools) or `"code-api"` (one tool, agent drives via tsx) | No |
+| `JIRA_TOOL_MODE` | `"classic"` (default — 16 consolidated tools) or `"code-api"` (one tool, agent drives via the bundled `jira-cli` shell binary) | No |
 | `JIRA_ENABLED_CATEGORIES` | Comma-separated category whitelist. Empty = all 16 categories enabled. | No |
 | `JIRA_DISABLED_ACTIONS` | Comma-separated `category.action` blacklist. Enforced at the dispatch layer in **both** modes. | No |
 
@@ -98,25 +98,26 @@ Concrete numbers from a recent benchmark run on a real Jira instance:
 | none (16 tools) | 30.6KB | ~7,800 | 1× |
 | 3 categories | 6.3KB | ~1,600 | 5× |
 | 3 cats + 5 disabled actions | 4.6KB | ~1,200 | 6.6× |
-| code-api mode (1 tool) | 0.4KB | ~95 | 75× |
+| code-api mode (1 tool) | 0.4KB | ~100 | 76× |
 
 For the full v1-vs-v2 picture (per-call cost, three scenarios, ratios) see [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
-### code-api mode (advanced)
+### code-api mode (recommended for shell-capable agents)
 
-Set `JIRA_TOOL_MODE=code-api` to expose a single MCP tool, `jira_code_api`. Calling it returns the path to the package's pre-built TypeScript API and a usage example. The agent then drives Jira from a shell using tsx:
+If your agent can run shell commands (Claude Code, etc.), set `JIRA_TOOL_MODE=code-api` for a ~76× smaller tool-list footprint paid on every conversation. Per-call cost is essentially the same as classic, so the savings are pure win once your agent is making more than a few Jira calls.
+
+Set `JIRA_TOOL_MODE=code-api` to expose a single MCP tool, `jira_code_api`. Calling it returns the path to the bundled `jira-cli` binary plus the `JIRA_MCP_SOCKET` address. The agent then drives Jira from a shell:
 
 ```bash
-JIRA_MCP_SOCKET=/tmp/jira-mcp/${session}/ipc.sock npx tsx -e '
-  import * as jira from "<apiDir>/index.js";  // <apiDir> comes from the jira_code_api response
-  (async () => {
-    const issue = await jira.issue.get({ issueIdOrKey: "PROJ-1" });
-    console.log(issue.summary.status);
-  })();
-'
+JIRA_MCP_SOCKET=/tmp/jira-mcp/${session}/ipc.sock \
+  node <cli-path> issue.get --issueIdOrKey=PROJ-1
+# stdout: trimmed summary as JSON, then a final `ref: /path` line
+# pointing at the full response on disk (`cat` it for detail).
 ```
 
-Trades classic's per-call simplicity for the smallest possible tool-list cost. Useful for sessions that compose many calls (jq filters, multi-call investigations) where the saved tool-list tokens compound across turns. See [docs/MIGRATION.md](docs/MIGRATION.md#code-api-mode) for the full flow.
+Discovery: `node <cli-path> --help` lists every operation; `node <cli-path> <op> --help` lists its flags.
+
+Stays as `classic` by default because tool-only MCP clients (no shell access) can't drive `jira-cli`. See [docs/MIGRATION.md](docs/MIGRATION.md#code-api-mode) for the full flow.
 
 ## Resources
 

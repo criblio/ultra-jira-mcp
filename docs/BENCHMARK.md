@@ -16,11 +16,14 @@ endpoint trims (the body of the work in v2) collapse 50–270 KB Jira
 payloads into 1–16 KB summaries that still preserve the description,
 comments, subtasks, and links inline.
 
-**Tool listing: 1.5× smaller unfiltered, 100× smaller in code-api mode.**
+**Tool listing: 1.5× smaller unfiltered, 99× smaller in code-api mode.**
 The classic-mode listing is similar to v1 in size, since 16 fatter
 consolidated tools sit in roughly the same space as 85 thinner v1 tools.
 The bigger lever is `JIRA_ENABLED_CATEGORIES` filtering or the optional
-`code-api` mode (single tool).
+`code-api` mode, where the MCP listing exposes a single tool that hands
+the agent a path to the bundled `jira-cli` binary plus a socket address.
+All subsequent Jira calls happen as `jira-cli <op> --flag=value` from
+the agent's shell — no further MCP traffic.
 
 ## Tool-list cost (paid every conversation)
 
@@ -28,10 +31,10 @@ The bigger lever is `JIRA_ENABLED_CATEGORIES` filtering or the optional
 | ------------ | ------ | ------- |
 | v1           | 38.9KB | 9,947   |
 | v2 classic   | 25.1KB | 6,427   |
-| v2 code-api  | 378B   | 95      |
+| v2 code-api  | 401B   | 100     |
 
 - **v2 classic vs v1: 1.5× smaller**
-- **v2 code-api vs v1: 105× smaller**
+- **v2 code-api vs v1: 99× smaller**
 
 Filtering with `JIRA_ENABLED_CATEGORIES` cuts classic further (a 3-category
 filter lands around 6 KB — see `CHANGELOG.md`).
@@ -49,9 +52,10 @@ search returning a small page of results.
 | JQL search ~10 tickets    | 20.5KB  | 3.5KB      | 3.7KB               | 29.1KB            | **5.8× smaller**  |
 
 `v2 code-api summary` is what the agent sees if it never reads a `ref`
-file. `v2 code-api +full` is the upper bound where the agent reads
-every ref. Real sessions land somewhere between based on how much
-detail the agent actually needs.
+file — the trimmed JSON that `jira-cli` prints on stdout. `v2 code-api
++full` is the upper bound where the agent additionally `cat`s every
+`ref:` path the CLI emits. Real sessions land somewhere between based
+on how much detail the agent actually needs.
 
 The `investigate rich ticket` row is the headline: v1 dumps **270 KB**
 (~67k tokens) into the context window for a single ticket-with-comments
@@ -69,9 +73,9 @@ Three changes do most of the work:
    nested `fields` objects, schema metadata, etc.).
 2. **List endpoint trims.** Paginated list responses (`comment.list`,
    `worklog.list`, `board.issues`, `sprint.issues`, …) emit
-   `{total, startAt, maxResults, truncated}` only. The full body lives
-   in the on-disk `ref` (code-api mode) or is fetchable with a
-   targeted `get` (classic mode).
+   `{total, startAt, maxResults, truncated}` only. In code-api mode
+   the full body lives in an on-disk `ref` file the CLI prints the
+   path to; in classic mode it's fetchable with a targeted `get`.
 3. **ADF flattening.** Atlassian Document Format trees flatten to
    plain text on the way out, so a 500-byte rich-text comment doesn't
    show up as a 4 KB nested AST.
