@@ -107,7 +107,7 @@ interface Connection {
   transport: StdioClientTransport;
   toolListBytes: number;
   socketAddress?: string;
-  apiDir?: string;
+  cli?: string;
 }
 
 async function connect(mode: Mode, env: BenchEnv): Promise<Connection> {
@@ -147,17 +147,16 @@ async function connect(mode: Mode, env: BenchEnv): Promise<Connection> {
   const toolListBytes = byteLength(tools);
 
   let socketAddress: string | undefined;
-  let apiDir: string | undefined;
+  let cli: string | undefined;
   if (mode === "code-api") {
-    // First call to jira_code_api gives us the apiDir + socket. We
-    // need both to drive stub calls below.
+    // First call to jira_code_api gives us the cli path + socket.
     const resp = await client.callTool({ name: "jira_code_api", arguments: {} });
     const payload = parseToolText(resp);
-    apiDir = payload.apiDir;
+    cli = payload.cli;
     socketAddress = payload.socketAddress;
   }
 
-  return { client, transport, toolListBytes, socketAddress, apiDir };
+  return { client, transport, toolListBytes, socketAddress, cli };
 }
 
 async function disconnect(conn: Connection): Promise<void> {

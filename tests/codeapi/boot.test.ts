@@ -51,19 +51,19 @@ afterEach(async () => {
 
 describe("bootCodeApi", () => {
   it("starts the bridge and publishes JIRA_MCP_SOCKET", async () => {
-    // boot no longer generates stubs per session — the api/ ships
-    // statically (built by scripts/build-api.ts at npm run build
-    // time). This test only asserts the lifecycle pieces boot still
-    // owns: bridge startup + env var publication + apiDir threading.
+    // boot no longer generates anything per session — the jira-cli
+    // binary ships statically (built by `tsc` at npm run build time).
+    // This test only asserts the lifecycle pieces boot still owns:
+    // bridge startup + env var publication + cliPath threading.
     const client = makeMockClient();
-    const apiDir = "/tmp/test-api-dir-not-actually-read-here";
+    const cliPath = "/tmp/test-cli-path-not-actually-executed-here";
     const booted = await bootCodeApi({
       client,
-      apiDir,
+      cliPath,
       cleanupSessions: false,
     });
     try {
-      expect(booted.ctx.apiDir).toBe(apiDir);
+      expect(booted.ctx.cliPath).toBe(cliPath);
       expect(booted.bridge.address).toBeTruthy();
       expect(booted.ctx.socketAddress).toBe(booted.bridge.address);
       expect(process.env.JIRA_MCP_SOCKET).toBe(booted.bridge.address);
@@ -151,16 +151,16 @@ describe("bootCodeApi", () => {
     }
   });
 
-  it("defaults apiDir to build/api when not overridden", async () => {
+  it("defaults cliPath to build/cli/index.js when not overridden", async () => {
     const client = makeMockClient();
     const booted = await bootCodeApi({ client, cleanupSessions: false });
     try {
-      // The default points at this build's static api/ directory,
+      // The default points at this build's compiled CLI binary,
       // resolved relative to boot.js. We don't assert it exists on
       // disk here (depends on npm run build having run), only that
       // the path shape is correct.
-      expect(booted.ctx.apiDir).toMatch(/[/\\]api$/);
-      expect(booted.ctx.apiDir).not.toContain(sessionCacheDir());
+      expect(booted.ctx.cliPath).toMatch(/[/\\]cli[/\\]index\.js$/);
+      expect(booted.ctx.cliPath).not.toContain(sessionCacheDir());
     } finally {
       await booted.bridge.close();
     }

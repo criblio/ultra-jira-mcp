@@ -1,17 +1,26 @@
-// The single MCP tool exposed in code-api mode (PR #10).
+// The single MCP tool exposed in code-api mode.
 //
 // In code-api mode the server publishes only this tool. Calling it
-// returns the path to the generated TypeScript stubs and a short
-// usage example; the agent then drives Jira through those stubs in
-// its own execution environment (Claude Code's Bash + tsx, etc.) and
-// never calls an MCP tool again for reads.
+// returns the path to the jira-cli binary and the JIRA_MCP_SOCKET
+// address; the agent then drives Jira through that CLI from its own
+// shell and never calls an MCP tool again for reads.
 //
-// The handler is stateless — the heavy lifting (stub generation +
-// bridge startup) happens once at server boot in `src/index.ts`. We
-// just describe to the agent what was set up.
+// The handler is stateless — the heavy lifting (CLI binary already
+// built into the package + bridge startup) happens once at server
+// boot in `src/index.ts`. We just describe to the agent what was
+// set up.
+//
+// Earlier revisions of this tool advertised a directory of generated
+// TypeScript stubs for the agent to import via `npx tsx -e`. That
+// shape kept tripping the agent on tsx runtime quirks (top-level
+// await under CJS, `.js` → `.ts` resolver skipping paths under
+// `/node_modules/`). The CLI handoff collapses Bash → npx → tsx →
+// esbuild → node → import resolution → IPC down to Bash → binary →
+// IPC, which is the same call surface every other shell tool the
+// agent uses already has.
 
 export interface CodeApiToolContext {
-  apiDir: string;        // absolute path to generated `api/`
+  cliPath: string;       // absolute path to the jira-cli binary
   socketAddress: string; // value placed in JIRA_MCP_SOCKET
 }
 
@@ -21,10 +30,10 @@ export const JIRA_CODE_API_TOOL_NAME = "jira_code_api";
 // the listing token cost stays under the ~500-token target the plan
 // quotes for Layer 3.
 export const JIRA_CODE_API_TOOL_DESCRIPTION =
-  "Access Jira via TypeScript. Call once to get the on-disk API path, " +
-  "then `import` the generated stubs in your shell (tsx) — every call " +
-  "returns a Ref<T> with a trimmed summary inline and the full response " +
-  "on disk for when you need it.";
+  "Access Jira via the bundled jira-cli shell binary. Call once to " +
+  "get the binary path and JIRA_MCP_SOCKET address; every subsequent " +
+  "call is a `jira-cli <op> --flag=value` invocation that returns a " +
+  "trimmed summary on stdout and a ref path to the full response.";
 
 export const jiraCodeApiToolDefinition = {
   name: JIRA_CODE_API_TOOL_NAME,
@@ -41,8 +50,7 @@ export const jiraCodeApiToolDefinition = {
 // agent's first call doesn't blow the budget the rest of the session
 // is supposed to save.
 export interface CodeApiToolResponse {
-  apiDir: string;
-  rootIndex: string;
+  cli: string;
   socketEnv: string;
   socketAddress: string;
   usage: string;
@@ -54,47 +62,33 @@ export function buildCodeApiToolResponse(
   // The agent typically runs this via Claude Code's Bash tool, whose
   // child shells *do not* inherit env vars from the MCP server
   // process. So the snippet must export JIRA_MCP_SOCKET inline rather
-  // than assume it's already set. tsx is the recommended runner — it
-  // executes the .ts stubs directly.
+  // than assume it's already set.
   //
-  // The body wraps in an async IIFE because `tsx -e` transforms the
-  // snippet under esbuild's CJS target by default, where top-level
-  // await is illegal. The IIFE keeps the snippet portable across
-  // every cwd / package.json layout the agent might run in.
-  // The discovery hint, common-ops list, and subtask note exist
-  // because real first-use sessions burned 4-5 calls guessing at the
-  // wrong endpoint names ("searchAndReconsileIssuesUsingJql") and
-  // wrong subtask strategies ("issueLinkType = has subtask"). The
-  // function shape is `jira.<resource>.<operation>` — `ls` the apiDir
-  // for resources, then read the operation file's *Args interface.
-  //
-  // The advertised import points at `index.ts` (what the generator
-  // actually writes), not `index.js`. tsx normally rewrites .js → .ts,
-  // but its resolver skips that rewrite for paths under
-  // /node_modules/ when invoked inside a TS project. Since the apiDir
-  // typically lives under ~/.npm/_npx/.../node_modules/jira-mcp/...,
-  // advertising .js made the import fail from any cwd with a
-  // tsconfig.json. Pointing at .ts directly avoids the heuristic.
+  // The discovery hint and subtask note exist because real first-use
+  // sessions burned 4-5 calls guessing at the wrong endpoint names
+  // ("searchAndReconsileIssuesUsingJql") and wrong subtask
+  // strategies ("issueLinkType = has subtask"). `jira-cli --help`
+  // lists every operation; `jira-cli <op> --help` lists its flags.
+  // We prefix invocations with `node` rather than relying on the
+  // shebang + exec bit. `npm install` sets the exec bit when wiring
+  // `bin` entries, but a freshly-built local checkout (the common
+  // dev path) leaves the file non-executable, and the agent has no
+  // reason to suspect that. `node <path>` works either way.
+  const cmd = `node ${ctx.cliPath}`;
   const usage = [
-    `# tsx required. JIRA_MCP_SOCKET prefix is load-bearing — child`,
-    `# shells don't inherit the MCP server's env.`,
-    `JIRA_MCP_SOCKET=${ctx.socketAddress} npx tsx -e '`,
-    `import * as jira from "${ctx.apiDir}/index.ts";`,
-    `import { readFile } from "fs/promises";`,
-    `(async () => {`,
-    `  const r = await jira.issue.get({ issueIdOrKey: "PROJ-1" });`,
-    `  console.log(r.summary);  // trimmed projection`,
-    `  const full = JSON.parse(await readFile(r.ref, "utf8"));`,
-    `})();'`,
-    `# Shape: jira.<resource>.<op>. ls apiDir for resources, then`,
-    `# read <resource>/<op>.ts for the *Args interface. Common ops:`,
-    `# issue.{get,create,update,transition}, search.issues, comment.*.`,
-    `# Subtasks: use \`parent = KEY\` JQL, not "has subtask" link type.`,
+    `# JIRA_MCP_SOCKET prefix is load-bearing — child shells don't`,
+    `# inherit the MCP server's env.`,
+    `JIRA_MCP_SOCKET=${ctx.socketAddress} \\`,
+    `  ${cmd} issue.get --issueIdOrKey=PROJ-1`,
+    `# stdout: trimmed summary as JSON, then a final \`ref: /path\` line`,
+    `# pointing at the full response on disk (\`cat\` it for detail).`,
+    `# Discovery: \`${cmd} --help\` lists ops;`,
+    `# \`${cmd} <op> --help\` lists flags.`,
+    `# Subtasks: use \`parent = KEY\` JQL on search.issues, not "has subtask".`,
   ].join("\n");
 
   return {
-    apiDir: ctx.apiDir,
-    rootIndex: `${ctx.apiDir}/index.ts`,
+    cli: ctx.cliPath,
     socketEnv: "JIRA_MCP_SOCKET",
     socketAddress: ctx.socketAddress,
     usage,

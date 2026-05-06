@@ -1,13 +1,13 @@
 // Code-api startup glue.
 //
 // Pulled out of `src/index.ts` so the wiring (cleanup → resolve
-// static api dir → start bridge → publish socket env var) is
-// testable in isolation, without standing up the MCP transport.
+// CLI path → start bridge → publish socket env var) is testable in
+// isolation, without standing up the MCP transport.
 //
-// The api/ directory is built once at `npm run build` time
-// (scripts/build-api.ts) and ships in the package. Per-session
-// uniqueness is handled entirely by JIRA_MCP_SOCKET, which the
-// generated _client.ts reads at invoke time.
+// The CLI binary (jira-cli) ships pre-built in the npm package at
+// build/cli/index.js. Per-session uniqueness is handled entirely by
+// JIRA_MCP_SOCKET, which the CLI reads from its own env at invoke
+// time.
 
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,15 +18,14 @@ import { cleanupStaleSessions } from "../core/sandbox.js";
 import { startBridge, type BridgeServer } from "./bridge.js";
 import type { CodeApiToolContext } from "./tool.js";
 
-// Resolves to build/api/ at runtime. This module compiles to
-// build/codeapi/boot.js, so "../api" from there lands at build/api/.
-// If anyone ever runs the server through `tsx src/codeapi/boot.ts`
-// directly, the path would resolve to src/api/ which doesn't exist —
-// but the repo has no tsx dev script today; npm run dev is `tsc
-// --watch` which keeps build/api/ populated.
-export function defaultApiDir(): string {
+// Resolves to build/cli/index.js at runtime. This module compiles to
+// build/codeapi/boot.js, so "../cli/index.js" from there lands at
+// build/cli/index.js. The CLI is what code-api mode hands to the
+// agent — a single shell-callable binary that talks to the bridge
+// over the JIRA_MCP_SOCKET socket.
+export function defaultCliPath(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.join(here, "..", "api");
+  return path.join(here, "..", "cli", "index.js");
 }
 
 export interface BootedCodeApi {
@@ -41,7 +40,7 @@ export interface BootCodeApiOpts {
   // would still be reachable when a user opts into code-api.
   disabledActions?: readonly string[];
   // Override hook for tests. Production callers leave this unset.
-  apiDir?: string;
+  cliPath?: string;
   // When false (default true) skip the cleanup-stale-sessions sweep.
   // Tests turn this off to avoid touching siblings of their session
   // dir.
@@ -58,7 +57,7 @@ export async function bootCodeApi(
     });
   }
 
-  const apiDir = opts.apiDir ?? defaultApiDir();
+  const cliPath = opts.cliPath ?? defaultCliPath();
 
   const bridge = await startBridge({
     manifest: operations,
@@ -67,12 +66,12 @@ export async function bootCodeApi(
   });
 
   // Place the socket in the *server* env so any subprocess (Claude
-  // Code's Bash tool, a tsx invocation) inherits it without the
-  // user having to configure anything.
+  // Code's Bash tool, a direct jira-cli invocation) inherits it
+  // without the user having to configure anything.
   process.env.JIRA_MCP_SOCKET = bridge.address;
 
   return {
     bridge,
-    ctx: { apiDir, socketAddress: bridge.address },
+    ctx: { cliPath, socketAddress: bridge.address },
   };
 }
