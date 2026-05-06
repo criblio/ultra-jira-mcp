@@ -4,7 +4,8 @@
   "description": "MCP server for Jira Cloud - provides AI models with full access to Jira functionality",
   "type": "module",
   "bin": {
-    "jira-mcp": "./build/index.js"
+    "jira-mcp": "./build/index.js",
+    "jira-cli": "./build/cli/index.js"
   },
   "main": "./build/index.js",
   "files": [

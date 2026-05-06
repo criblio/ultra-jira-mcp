@@ -284,16 +284,20 @@ Source of truth: every v1 tool name in v1's README, mapped to its v2 equivalent.
 
 ## code-api mode
 
-`JIRA_TOOL_MODE=code-api` is an opt-in path that exposes a single MCP tool, `jira_code_api`, instead of the 16 consolidated tools. The agent calls it once to get the path of an on-disk TypeScript API and a shell snippet, then drives Jira through `tsx`:
+`JIRA_TOOL_MODE=code-api` is an opt-in path that exposes a single MCP tool, `jira_code_api`, instead of the 16 consolidated tools. The agent calls it once to get the path of the package-shipped TypeScript API plus a shell snippet, then drives Jira through `tsx`:
 
 ```bash
 JIRA_MCP_SOCKET=/tmp/jira-mcp/${session}/ipc.sock npx tsx -e '
-  import * as jira from "/tmp/jira-mcp/${session}/api/index.js";
-  const issue = await jira.issue.get({ issueIdOrKey: "PROJ-1" });
-  console.log(issue.summary.status);
-  // issue.ref is an absolute path to the full JSON; read it with fs when needed.
+  import * as jira from "<apiDir>/index.js";  // <apiDir> is returned by jira_code_api
+  (async () => {
+    const issue = await jira.issue.get({ issueIdOrKey: "PROJ-1" });
+    console.log(issue.summary.status);
+    // issue.ref is an absolute path to the full JSON; read it with fs when needed.
+  })();
 '
 ```
+
+The `apiDir` is now the package's pre-built `build/api/` directory — it ships in the npm tarball and is the same on every server start. Earlier v2 alphas generated stubs into `${TMPDIR}/jira-mcp/${session}/api/` per session; that's no longer necessary now that the generated `types.ts` is self-contained.
 
 **When to use it:** sessions that compose many calls (jq filtering, multi-call investigations) where the per-call `JIRA_MCP_SOCKET=… npx tsx -e` overhead is amortized over many tool uses, or where the tool-list saving (~7,700 tokens vs classic) matters more than per-call simplicity.
 

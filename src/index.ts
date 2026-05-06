@@ -185,7 +185,7 @@ async function main() {
   await server.connect(transport);
   console.error(
     `Jira MCP server running on stdio (mode=${modeState.mode}` +
-      (modeState.mode === "code-api" ? `, api=${modeState.ctx.apiDir}` : "") +
+      (modeState.mode === "code-api" ? `, cli=${modeState.ctx.cliPath}` : "") +
       (modeState.mode === "classic" ? `, tools=${modeState.tools.length}` : "") +
       ")",
   );

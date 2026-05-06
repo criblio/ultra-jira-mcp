@@ -7,17 +7,17 @@
 //     `jira_issue` takes `{ action, ...args }` and dispatches through
 //     `invokeOperation` against the manifest entry whose name matches.
 //
-//   - Layer 3 (code-api stubs, PR #8): on server startup we emit one
-//     TypeScript file per operation under `${sessionCacheDir}/api/…`.
-//     Each stub is ~20 lines — a typed signature + a thin body that
-//     forwards to the running server via the local IPC bridge. The
-//     generator walks the manifest to produce these.
+//   - Layer 3 (code-api): the bundled `jira-cli` binary reads this
+//     manifest to validate `<resource>.<op>` invocations from the
+//     command line, build `--help` output, and forward calls over
+//     the local IPC bridge. Per-session uniqueness is handled at
+//     runtime by `JIRA_MCP_SOCKET`.
 //
 // The manifest is deliberately stringly-typed: operations declare
 // their params by name + role (path/query/body), not by a static
-// TypeScript shape. Type-safe wrappers are the *generator's* job in
-// Layer 3. Keeping the manifest shape small means we can iterate it
-// generically without type gymnastics.
+// TypeScript shape. Validation/coercion is the CLI's job. Keeping
+// the manifest shape small means we can iterate it generically
+// without type gymnastics.
 
 import type { JiraClient } from "../auth/jira-client.js";
 import { trimRegistry, type TrimKey } from "./trim-registry.js";
@@ -50,11 +50,13 @@ export interface ParamSpec {
 export type BodyShape = "object" | "rawString";
 
 export interface Operation {
-  // Stable identifier — stable across v2 minor versions. Layer 3
-  // stubs are named after this (`issue.get` → `api/issues/getIssue.ts`).
+  // Stable identifier — stable across v2 minor versions. The CLI
+  // accepts this verbatim as its positional argument
+  // (`jira-cli issue.get ...`) and uses it to look up the right
+  // entry in the manifest.
   name: string;
-  // Human-readable single-line summary. Surfaces in generated stubs'
-  // JSDoc and in Layer 2 tool schemas.
+  // Human-readable single-line summary. Surfaces in `jira-cli --help`
+  // listings and in Layer 2 tool schemas.
   description: string;
   verb: HttpVerb;
   // Path template with `{paramName}` placeholders. Every placeholder
@@ -76,8 +78,9 @@ export type Manifest = readonly Operation[];
 
 // --- Path templating ---------------------------------------------------
 
-// Extract all `{name}` placeholders from a template. Exported for the
-// generator so it can emit the right parameter list on stubs.
+// Extract all `{name}` placeholders from a template. Exported because
+// the manifest test suite asserts every placeholder shows up as a
+// `role: "path"` param.
 export function extractPathParams(template: string): string[] {
   const out: string[] = [];
   const re = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;

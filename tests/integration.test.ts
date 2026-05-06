@@ -188,8 +188,8 @@ describe.skipIf(!canRun)("code-api mode (live Jira)", () => {
     booted = await bootCodeApi({ client, cleanupSessions: false });
   });
 
-  it("jira_code_api context exposes the api dir + socket", () => {
-    expect(booted!.ctx.apiDir).toBeTruthy();
+  it("jira_code_api context exposes the cli path + socket", () => {
+    expect(booted!.ctx.cliPath).toBeTruthy();
     expect(booted!.ctx.socketAddress).toBeTruthy();
     expect(booted!.bridge.address).toBe(booted!.ctx.socketAddress);
   });
@@ -232,7 +232,7 @@ describe.skipIf(!canRun)("code-api mode (live Jira)", () => {
     const local = await bootCodeApi({
       client,
       cleanupSessions: false,
-      apiDir: path.join(sessionCacheDir(), "api-disabled"),
+      cliPath: path.join(sessionCacheDir(), "cli-disabled"),
       disabledActions: ["issue.delete"],
     });
     try {
