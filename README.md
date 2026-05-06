@@ -119,6 +119,27 @@ Discovery: `node <cli-path> --help` lists every operation; `node <cli-path> <op>
 
 Stays as `classic` by default because tool-only MCP clients (no shell access) can't drive `jira-cli`. See [docs/MIGRATION.md](docs/MIGRATION.md#code-api-mode) for the full flow.
 
+### Standalone CLI (no MCP server)
+
+The same `jira-cli` binary works without an MCP server. Set `JIRA_HOST` / `JIRA_EMAIL` / `JIRA_API_TOKEN` in your shell (or a `.env.local` in the cwd) and invoke it directly:
+
+```bash
+export JIRA_HOST=https://yourcompany.atlassian.net
+export JIRA_EMAIL=you@example.com
+export JIRA_API_TOKEN=...
+npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli issue.get --issueIdOrKey=PROJ-1
+```
+
+The CLI auto-selects between **bridge mode** (`JIRA_MCP_SOCKET` set, talks to a running server) and **direct mode** (no socket, builds a `JiraClient` in-process). Same trim + ref output either way; credentials never leave the CLI's `process.env`, so they don't enter the agent's context.
+
+For Claude Code users, install the skill once so the agent discovers the CLI on its own:
+
+```bash
+npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli install-skill
+```
+
+This writes `~/.claude/skills/jira/SKILL.md`. The skill loads on demand whenever the user mentions Jira and teaches the agent the canonical invocation, common operations, and `--help` discovery. Re-run with `--force` to update; `--print` dumps the rendered SKILL.md to stdout without writing.
+
 ## Resources
 
 The server also exposes Jira data via MCP resources:

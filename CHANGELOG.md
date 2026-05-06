@@ -2,6 +2,24 @@
 
 All notable changes to jira-mcp are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased — code-api shifts from TypeScript stubs to a CLI
+
+### Changed
+
+- **code-api mode now ships a `jira-cli` shell binary instead of a directory of TypeScript stubs.** The MCP `jira_code_api` tool returns the binary's path and the `JIRA_MCP_SOCKET` address; the agent invokes Jira as `node <cli-path> <op> --flag=value` from any shell. Trim + ref behaviour and the IPC bridge protocol are unchanged.
+- **Why**: real first-use sessions repeatedly tripped on `npx tsx -e '...'` quirks — top-level await unsupported under tsx's CJS target, and tsx's `.js` → `.ts` resolver skipping paths under `/node_modules/` (which is where every install lives). The CLI handoff collapses Bash → npx → tsx → esbuild → node → import resolution → IPC down to Bash → binary → IPC.
+- **Tool-list cost**: ~95 tokens → ~100 tokens. Slight bump because the new usage string includes a discovery hint and the subtask-JQL gotcha. Per-call cost unchanged.
+
+### Added
+
+- **Direct mode** in `jira-cli`: when `JIRA_MCP_SOCKET` is unset, the CLI reads `JIRA_HOST` / `JIRA_EMAIL` / `JIRA_API_TOKEN` from its own environment (or `.env.local`), builds a `JiraClient` in-process, and dispatches through the same trim + sandbox helper the bridge uses on the server side. Lets users run `npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli <op>` without standing up the MCP server.
+- **`jira-cli install-skill`** writes `~/.claude/skills/jira/SKILL.md` so Claude Code agents discover the CLI in standalone (no-MCP) sessions. Refuses to clobber without `--force`; `--print` dumps the rendered SKILL.md to stdout.
+- **`jira-cli` is published as a second `bin` entry** in `package.json`. `npm i -g jira-mcp` exposes both binaries.
+
+### Removed
+
+- **`build/api/` and the stub generator.** Replaced by the CLI; the stub-generation step is gone from `npm run build` (`tsc` only now). `apiDir` and `rootIndex` are dropped from the `jira_code_api` response in favor of `cli`.
+
 ## v2.0.0 — Context-efficient rewrite
 
 **Breaking change.** v1 stays maintained on the [`1.x`](https://github.com/scottlepp/jira-mcp/tree/1.x) branch. See [docs/MIGRATION.md](docs/MIGRATION.md) for the upgrade path.

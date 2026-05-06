@@ -85,9 +85,24 @@ function runCli(
   args: readonly string[],
   env: NodeJS.ProcessEnv = {},
 ): Promise<CliResult> {
+  // Strip Jira creds from the parent env so direct-mode tests don't
+  // accidentally hit a real Jira instance when a developer has
+  // .env.local exported in their shell. Tests that exercise direct
+  // mode pass their own JIRA_HOST/EMAIL/TOKEN explicitly. Tests that
+  // exercise bridge mode pass JIRA_MCP_SOCKET; the absence of creds
+  // is fine because those tests never reach the direct dispatch
+  // path. The chdir to /tmp prevents dotenv from loading the repo's
+  // .env.local at CLI startup.
+  const sanitized: NodeJS.ProcessEnv = { ...process.env };
+  delete sanitized.JIRA_HOST;
+  delete sanitized.JIRA_EMAIL;
+  delete sanitized.JIRA_API_TOKEN;
+  delete sanitized.JIRA_CLOUD_ID;
+  delete sanitized.JIRA_MCP_SOCKET;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI_PATH, ...args], {
-      env: { ...process.env, ...env },
+      env: { ...sanitized, ...env },
+      cwd: "/tmp",
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -139,10 +154,26 @@ describe("jira-cli", () => {
     expect(r.stderr).toContain("bogusFlag");
   });
 
-  it("errors clearly when JIRA_MCP_SOCKET is unset", async () => {
+  it("falls through to direct mode when JIRA_MCP_SOCKET is unset and surfaces the missing-creds error", async () => {
+    // No socket, no Jira creds → direct mode kicks in, getConfig()
+    // detects the missing env vars, and the CLI surfaces that error
+    // with exit code 1. The error message names the missing vars so
+    // the user knows what to set.
     const r = await runCli(["issue.get", "--issueIdOrKey=ABC-1"]);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("JIRA_MCP_SOCKET");
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("Missing required environment variables");
+    expect(r.stderr).toContain("JIRA_HOST");
+    expect(r.stderr).toContain("JIRA_API_TOKEN");
+  });
+
+  it("--help in direct mode (no socket, no creds) still works", async () => {
+    // Help shouldn't require any env — the agent should be able to
+    // discover the operation surface before configuring anything.
+    const r = await runCli(["--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("Two modes");
+    expect(r.stdout).toContain("bridge");
+    expect(r.stdout).toContain("direct");
   });
 
   it("end-to-end: invokes a real bridge and prints summary + ref", async () => {
@@ -181,6 +212,29 @@ describe("jira-cli", () => {
     const summaryJson = lines.slice(0, -1).join("\n");
     const summary = JSON.parse(summaryJson);
     expect(summary).toMatchObject({ key: "ABC-1", status: "Open" });
+  });
+
+  it("install-skill --print writes SKILL.md content to stdout, not the filesystem", async () => {
+    // Subprocess-level smoke test for the meta-command dispatch path.
+    // Touches the real CLI bin to confirm: (a) `install-skill` is
+    // recognized as a positional, (b) bare boolean `--print` parses
+    // without erroring, (c) skill content lands on stdout. The
+    // detailed install behaviours (write/refuse/overwrite) are
+    // covered in install-skill.test.ts.
+    const r = await runCli(["install-skill", "--print"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("name: jira");
+    expect(r.stdout).toContain("jira-cli --help");
+  });
+
+  it("install-skill --help prints subcommand help, not operation help", async () => {
+    const r = await runCli(["install-skill", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("install-skill");
+    expect(r.stdout).toContain("--force");
+    expect(r.stdout).toContain("--print");
+    // Must NOT fall through to a "unknown operation" error.
+    expect(r.stderr).toBe("");
   });
 
   it("repeated --field flags produce an array forwarded to the bridge", async () => {

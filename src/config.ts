@@ -2,8 +2,14 @@ import { config } from "dotenv";
 
 // Load environment variables from .env files
 // Priority: .env.local > .env (later calls override earlier)
-config({ path: ".env" });
-config({ path: ".env.local", override: true });
+//
+// `quiet: true` suppresses dotenv v17's startup banner ("injected env
+// (n) from .env"). The banner goes to stderr and is harmless for
+// long-running processes (the MCP server) but adds noise to every
+// jira-cli invocation in direct mode. Silencing it keeps the CLI's
+// stderr reserved for actual errors.
+config({ path: ".env", quiet: true });
+config({ path: ".env.local", override: true, quiet: true });
 
 // Token types based on prefix:
 // - ATATT: Scoped API token (user)

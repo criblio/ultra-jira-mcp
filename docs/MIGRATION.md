@@ -4,7 +4,7 @@ v2 is a clean break, not a drop-in. Tools have new names, the response shape cha
 
 ## What changed at a glance
 
-- **85 tools → 16 consolidated tools.** Each v1 tool name like `jira_get_issue` becomes a `(tool, action)` pair: `jira_issue` with `action: "get"`. Tool-list cost drops from ~7,800 tokens to ~1,600–4,600 depending on how aggressively you filter (and to ~95 in the optional `code-api` mode).
+- **85 tools → 16 consolidated tools.** Each v1 tool name like `jira_get_issue` becomes a `(tool, action)` pair: `jira_issue` with `action: "get"`. Tool-list cost drops from ~7,800 tokens to ~1,600–4,600 depending on how aggressively you filter (and to ~100 in the optional `code-api` mode).
 - **Responses are now `{summary, ref, ...}` instead of raw Jira JSON.** The summary is a trimmed projection inline; the full untrimmed response is written to `${TMPDIR}/jira-mcp/${session}/` and the `ref` field points at it. Read the ref when you need detail. v1 returned the entire 50–100KB Jira payload.
 - **`JIRA_DISABLED_TOOLS` is now `JIRA_DISABLED_ACTIONS`** and takes manifest operation names like `issue.delete` instead of v1 tool names like `jira_delete_issue`.
 - **`JIRA_ENABLED_CATEGORIES` keeps working** with one rename: `issueLink` is now `link` (matches the v2 tool's name `jira_link`).
@@ -284,26 +284,39 @@ Source of truth: every v1 tool name in v1's README, mapped to its v2 equivalent.
 
 ## code-api mode
 
-`JIRA_TOOL_MODE=code-api` is an opt-in path that exposes a single MCP tool, `jira_code_api`, instead of the 16 consolidated tools. The agent calls it once to get the path of the package-shipped TypeScript API plus a shell snippet, then drives Jira through `tsx`:
+`JIRA_TOOL_MODE=code-api` is an opt-in path that exposes a single MCP tool, `jira_code_api`, instead of the 16 consolidated tools. The agent calls it once to get the path of the bundled `jira-cli` shell binary plus the `JIRA_MCP_SOCKET` address, then drives Jira from a shell:
 
 ```bash
-JIRA_MCP_SOCKET=/tmp/jira-mcp/${session}/ipc.sock npx tsx -e '
-  import * as jira from "<apiDir>/index.js";  // <apiDir> is returned by jira_code_api
-  (async () => {
-    const issue = await jira.issue.get({ issueIdOrKey: "PROJ-1" });
-    console.log(issue.summary.status);
-    // issue.ref is an absolute path to the full JSON; read it with fs when needed.
-  })();
-'
+JIRA_MCP_SOCKET=/tmp/jira-mcp/${session}/ipc.sock \
+  node <cli-path> issue.get --issueIdOrKey=PROJ-1
+# stdout: trimmed summary as JSON, then a final `ref: /path` line.
+# `cat` the ref file when the summary leaves out detail you need.
 ```
 
-The `apiDir` is now the package's pre-built `build/api/` directory — it ships in the npm tarball and is the same on every server start. Earlier v2 alphas generated stubs into `${TMPDIR}/jira-mcp/${session}/api/` per session; that's no longer necessary now that the generated `types.ts` is self-contained.
+Discovery is built in: `node <cli-path> --help` lists every operation, and `node <cli-path> <op> --help` shows one operation's flags.
 
-**When to use it:** sessions that compose many calls (jq filtering, multi-call investigations) where the per-call `JIRA_MCP_SOCKET=… npx tsx -e` overhead is amortized over many tool uses, or where the tool-list saving (~7,700 tokens vs classic) matters more than per-call simplicity.
+Earlier v2 alphas shipped a directory of pre-built TypeScript stubs the agent imported via `npx tsx -e '...'`. That shape kept tripping on tsx runtime quirks (top-level await under CJS; `.js` → `.ts` resolver skipping paths under `/node_modules/`). The CLI handoff collapses Bash → npx → tsx → esbuild → node → import resolution → IPC down to Bash → binary → IPC, which is the same call surface every other shell tool the agent uses already has.
 
-**When not to:** one-off lookups. Classic mode is simpler for the agent and the trim/sandbox shape gives you most of the per-call savings anyway. Per the v2.0 [CHANGELOG](../CHANGELOG.md#v200) benchmark, classic and code-api summary modes land within ~10% of each other on per-call cost.
+**When to use it:** any session where the agent can run shell commands and the conversation makes more than a handful of Jira calls. Tool-list saving (~6,300 tokens vs classic) is paid once per conversation; per-call cost is essentially the same as classic.
+
+**When not to:** MCP clients that don't expose shell access. Classic mode works without a shell.
 
 `JIRA_DISABLED_ACTIONS` is enforced in code-api mode too — disabled ops are blocked at the bridge dispatch layer before any HTTP call.
+
+### Standalone CLI (no MCP server)
+
+The same `jira-cli` binary works without an MCP server. Set `JIRA_HOST` / `JIRA_EMAIL` / `JIRA_API_TOKEN` in your shell (or a `.env.local` in the cwd) and invoke directly:
+
+```bash
+export JIRA_HOST=https://yourcompany.atlassian.net
+export JIRA_EMAIL=you@example.com
+export JIRA_API_TOKEN=...
+npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli issue.get --issueIdOrKey=PROJ-1
+```
+
+The CLI auto-selects between bridge mode (`JIRA_MCP_SOCKET` set, talks to a running server) and direct mode (no socket, builds a JiraClient in-process and hits Jira itself). Same trim + ref behaviour either way; credentials never leave the CLI's own `process.env`, so the agent never sees them.
+
+For Claude Code users: run `jira-cli install-skill` once to write `~/.claude/skills/jira/SKILL.md`. The skill loads on demand whenever the user mentions Jira and teaches the agent the canonical invocation, common operations, and the `--help` discovery pattern. Re-run with `--force` to update; `--print` dumps the rendered SKILL.md to stdout without touching disk.
 
 ## Reporting issues with the migration
 
