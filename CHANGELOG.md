@@ -12,7 +12,7 @@ v1 loaded ~30KB / ~7,800 tokens of MCP tool definitions before the agent read a 
 
 ### Token-budget benchmark
 
-Numbers below are from a real Jira instance, measured by `npm run benchmark` against the same set of tickets in each mode. "Bytes" is JSON delivered to the agent's context window; tokens are bytes/4 (close enough across Anthropic and OpenAI tokenizers for a relative comparison).
+Numbers below are from a real Jira instance, measured by `npm run benchmark` against the same set of tickets in each mode. "Bytes" is JSON delivered to the agent's context window; tokens are bytes/4 (close enough across Anthropic and OpenAI tokenizers for a relative comparison). Full v1-vs-v2 head-to-head numbers (per-call ratios, three scenarios) live in [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
 **Tool listing (paid every conversation):**
 

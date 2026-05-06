@@ -100,6 +100,8 @@ Concrete numbers from a recent benchmark run on a real Jira instance:
 | 3 cats + 5 disabled actions | 4.6KB | ~1,200 | 6.6× |
 | code-api mode (1 tool) | 0.4KB | ~95 | 75× |
 
+For the full v1-vs-v2 picture (per-call cost, three scenarios, ratios) see [docs/BENCHMARK.md](docs/BENCHMARK.md).
+
 ### code-api mode (advanced)
 
 Set `JIRA_TOOL_MODE=code-api` to expose a single MCP tool, `jira_code_api`. Calling it returns a path to a generated TypeScript API on disk and a usage example. The agent then drives Jira from a shell using tsx:
@@ -136,7 +138,7 @@ npm run benchmark       # measures tool-list + per-call bytes against live Jira
 npm run inspector       # @modelcontextprotocol/inspector against build/index.js
 ```
 
-The benchmark requires `.env.local` with the regular `JIRA_*` vars plus `JIRA_BENCH_TICKET_RICH` and `JIRA_BENCH_TICKET_SIMPLE` keys.
+The benchmark requires `.env.local` with the regular `JIRA_*` vars plus `JIRA_BENCH_TICKET_RICH` and `JIRA_BENCH_TICKET_SIMPLE` keys. To include v1 in the comparison, set up a sibling worktree once: `git worktree add ../jira-mcp-v1 v1.0.0 && (cd ../jira-mcp-v1 && npm install && npm run build)`. See [docs/BENCHMARK.md](docs/BENCHMARK.md) for the latest numbers.
 
 ## License
 
