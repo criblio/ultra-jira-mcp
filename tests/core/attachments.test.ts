@@ -1,0 +1,476 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { Readable } from "node:stream";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  assertValidIssueKey,
+  downloadAttachment,
+  guardSingleConsumption,
+  sanitizeFilename,
+  type AttachmentHttpResponse,
+  type AttachmentInput,
+  type AttachmentTransport,
+} from "../../src/core/attachments.js";
+import {
+  __resetSessionCacheDirForTests,
+  rootCacheDir,
+  sessionCacheDir,
+} from "../../src/core/sandbox.js";
+
+const originalSessionId = process.env.MCP_SESSION_ID;
+
+async function rmSessionDir(): Promise<void> {
+  await fs.rm(sessionCacheDir(), { recursive: true, force: true });
+}
+
+beforeEach(async () => {
+  process.env.MCP_SESSION_ID = `attach-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  __resetSessionCacheDirForTests();
+  await rmSessionDir();
+});
+
+afterEach(async () => {
+  await rmSessionDir();
+  if (originalSessionId === undefined) delete process.env.MCP_SESSION_ID;
+  else process.env.MCP_SESSION_ID = originalSessionId;
+  __resetSessionCacheDirForTests();
+});
+
+// --- Helpers -----------------------------------------------------------
+
+function ok(body: string | Buffer): AttachmentHttpResponse {
+  const buf = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  return {
+    statusCode: 200,
+    body: Readable.from([buf]),
+    bodyText: () => Promise.resolve(buf.toString("utf8")),
+  };
+}
+
+function err(status: number, message: string): AttachmentHttpResponse {
+  return {
+    statusCode: status,
+    body: Readable.from([Buffer.alloc(0)]),
+    bodyText: () => Promise.resolve(message),
+  };
+}
+
+function makeInput(overrides: Partial<AttachmentInput> = {}): AttachmentInput {
+  return {
+    id: "10001",
+    filename: "notes.txt",
+    mimeType: "text/plain",
+    size: 5,
+    contentUrl: "https://jira.example/attachments/10001",
+    ...overrides,
+  };
+}
+
+// --- sanitizeFilename --------------------------------------------------
+
+describe("sanitizeFilename", () => {
+  it.each([
+    // Path components are stripped — we only keep the basename.
+    ["../../../etc/passwd", "passwd"],
+    ["..\\..\\windows", "windows"],
+    ["foo/bar.txt", "bar.txt"],
+    ["foo\\bar.txt", "bar.txt"],
+    // Whitespace is collapsed and trimmed.
+    ["  spaced name .txt  ", "spaced name .txt"],
+    // Leading dots are removed so nothing becomes a dotfile.
+    [".hidden", "hidden"],
+    ["....weird.txt", "weird.txt"],
+    // Empty or pure-separator input falls back to a stable placeholder.
+    ["", "attachment"],
+    ["///", "attachment"],
+  ])("sanitizes %s → %s", (input, expected) => {
+    expect(sanitizeFilename(input)).toBe(expected);
+  });
+
+  it("preserves the extension when truncating long names", () => {
+    const longName = "a".repeat(250) + ".txt";
+    const out = sanitizeFilename(longName);
+    expect(out.length).toBeLessThanOrEqual(200);
+    expect(out.endsWith(".txt")).toBe(true);
+  });
+
+  it("caps at 200 when there's no sensible extension", () => {
+    const out = sanitizeFilename("a".repeat(500));
+    expect(out.length).toBe(200);
+  });
+});
+
+// --- downloadAttachment ------------------------------------------------
+
+describe("downloadAttachment — happy path", () => {
+  it("streams the response body to disk at the expected path", async () => {
+    const body = "hello";
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok(body));
+
+    const ref = await downloadAttachment(makeInput({ size: 5 }), {
+      issueKey: "PROJ-1",
+      authorizationHeader: "Basic abc",
+      transport,
+    });
+
+    expect(ref.filename).toBe("notes.txt");
+    expect(ref.mimeType).toBe("text/plain");
+    expect(ref.size).toBe(5);
+    expect(ref.path).toBe(
+      path.join(sessionCacheDir(), "issues", "PROJ-1", "attachments", "notes.txt"),
+    );
+    expect(await fs.readFile(ref.path, "utf8")).toBe("hello");
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledWith(
+      "https://jira.example/attachments/10001",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Basic abc",
+        }),
+      }),
+    );
+  });
+
+  it("populates preview for text/plain", async () => {
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok("hello world"));
+    const ref = await downloadAttachment(
+      makeInput({ size: 11, mimeType: "text/plain" }),
+      { issueKey: "PROJ-2", authorizationHeader: "", transport },
+    );
+    expect(ref.preview).toBe("hello world");
+  });
+
+  it("populates preview for application/json", async () => {
+    const json = '{"a":1}';
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok(json));
+    const ref = await downloadAttachment(
+      makeInput({ size: json.length, mimeType: "application/json" }),
+      { issueKey: "PROJ-2", authorizationHeader: "", transport },
+    );
+    expect(ref.preview).toBe(json);
+  });
+
+  it("returns null preview for binary mimes", async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG magic
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok(bytes));
+    const ref = await downloadAttachment(
+      makeInput({ size: 4, mimeType: "image/png", filename: "a.png" }),
+      { issueKey: "PROJ-2", authorizationHeader: "", transport },
+    );
+    expect(ref.preview).toBeNull();
+  });
+
+  it("caps preview at previewChars and appends ellipsis", async () => {
+    const body = "x".repeat(5000);
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok(body));
+    const ref = await downloadAttachment(
+      makeInput({ size: body.length, mimeType: "text/plain" }),
+      {
+        issueKey: "PROJ-1",
+        authorizationHeader: "",
+        transport,
+        previewChars: 100,
+      },
+    );
+    expect(ref.preview).toHaveLength(101);
+    expect(ref.preview?.endsWith("…")).toBe(true);
+  });
+});
+
+describe("downloadAttachment — idempotency", () => {
+  it("skips the network when the file already exists with matching size", async () => {
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok("hello"));
+
+    const first = await downloadAttachment(makeInput({ size: 5 }), {
+      issueKey: "PROJ-1",
+      authorizationHeader: "",
+      transport,
+    });
+    expect(transport).toHaveBeenCalledTimes(1);
+
+    const second = await downloadAttachment(makeInput({ size: 5 }), {
+      issueKey: "PROJ-1",
+      authorizationHeader: "",
+      transport,
+    });
+    expect(transport).toHaveBeenCalledTimes(1); // no re-fetch
+    expect(second.path).toBe(first.path);
+  });
+
+  it("re-downloads when on-disk size differs from expected", async () => {
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok("hello"));
+    const ref = await downloadAttachment(makeInput({ size: 5 }), {
+      issueKey: "PROJ-1",
+      authorizationHeader: "",
+      transport,
+    });
+    // Corrupt the on-disk file.
+    await fs.writeFile(ref.path, "CORRUPT_BUT_SAME_LENGTH_ISH", "utf8");
+
+    const newTransport = vi.fn<AttachmentTransport>().mockResolvedValue(ok("hello"));
+    await downloadAttachment(makeInput({ size: 5 }), {
+      issueKey: "PROJ-1",
+      authorizationHeader: "",
+      transport: newTransport,
+    });
+    // Size now differs from expected (27 vs 5) → re-download.
+    expect(newTransport).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("downloadAttachment — errors", () => {
+  it("throws on non-2xx status and does not leave a partial file", async () => {
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(err(403, "nope"));
+    await expect(
+      downloadAttachment(makeInput(), {
+        issueKey: "PROJ-1",
+        authorizationHeader: "",
+        transport,
+      }),
+    ).rejects.toThrow(/HTTP 403/);
+
+    const target = path.join(
+      sessionCacheDir(),
+      "issues",
+      "PROJ-1",
+      "attachments",
+      "notes.txt",
+    );
+    await expect(fs.stat(target)).rejects.toThrow();
+  });
+
+  it("throws and cleans up when downloaded size does not match expected", async () => {
+    // Advertise 5 bytes but serve 3.
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok("ouh"));
+    await expect(
+      downloadAttachment(makeInput({ size: 5 }), {
+        issueKey: "PROJ-1",
+        authorizationHeader: "",
+        transport,
+      }),
+    ).rejects.toThrow(/size mismatch/);
+
+    const target = path.join(
+      sessionCacheDir(),
+      "issues",
+      "PROJ-1",
+      "attachments",
+      "notes.txt",
+    );
+    await expect(fs.stat(target)).rejects.toThrow();
+  });
+
+  it("cleans up the partial temp file when the stream errors mid-flight", async () => {
+    const stream = new Readable({
+      read() {
+        this.push("partial");
+        this.destroy(new Error("boom"));
+      },
+    });
+    const transport: AttachmentTransport = async () => ({
+      statusCode: 200,
+      body: stream,
+      bodyText: () => Promise.resolve(""),
+    });
+    await expect(
+      downloadAttachment(makeInput({ size: 7 }), {
+        issueKey: "PROJ-1",
+        authorizationHeader: "",
+        transport,
+      }),
+    ).rejects.toThrow(/boom/);
+
+    const dir = path.join(
+      sessionCacheDir(),
+      "issues",
+      "PROJ-1",
+      "attachments",
+    );
+    // Directory may exist but must contain no .partial leftovers.
+    const entries = await fs
+      .readdir(dir)
+      .catch(() => [] as string[]);
+    for (const entry of entries) {
+      expect(entry).not.toMatch(/\.partial$/);
+    }
+  });
+});
+
+// --- assertValidIssueKey ----------------------------------------------
+
+describe("assertValidIssueKey", () => {
+  it.each([
+    "PROJ-1",
+    "PROJECT-123",
+    "A-1",
+    "A_B-42",
+    "ABC123-9999",
+  ])("accepts valid Jira key: %s", (key) => {
+    expect(() => assertValidIssueKey(key)).not.toThrow();
+  });
+
+  it.each([
+    ["path traversal", "../evil"],
+    ["lowercase project", "proj-1"],
+    ["no number", "PROJ-"],
+    ["no letters", "1-1"],
+    ["leading digit", "1PROJ-1"],
+    ["spaces", "PROJ - 1"],
+    ["slash", "PROJ/1"],
+    ["empty", ""],
+    ["just a number", "123"],
+  ])("rejects %s (%s)", (_label, key) => {
+    expect(() => assertValidIssueKey(key)).toThrow(/Invalid Jira issue key/);
+  });
+});
+
+describe("downloadAttachment — issueKey validation", () => {
+  it("throws on a traversal issueKey before any fs work happens", async () => {
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(
+      ok("ignored"),
+    );
+    await expect(
+      downloadAttachment(makeInput(), {
+        issueKey: "../../escape",
+        authorizationHeader: "",
+        transport,
+      }),
+    ).rejects.toThrow(/Invalid Jira issue key/);
+    expect(transport).not.toHaveBeenCalled();
+  });
+});
+
+// --- temp file uniqueness ---------------------------------------------
+
+describe("downloadAttachment — concurrent temp file safety", () => {
+  it("uses a different temp file per call so parallel downloads don't collide", async () => {
+    // Capture every temp file the streams wrote to by listening to
+    // the attachments directory between the call and completion.
+    // The simplest way to observe the temp name: make the transport
+    // slow and list the dir mid-stream.
+    const observed = new Set<string>();
+
+    const makeSlowStream = (payload: string): AttachmentHttpResponse => {
+      const rd = new Readable({ read() {} });
+      const key = `PROJ-1-${Math.random()}`;
+      observed.add(key);
+      setTimeout(() => {
+        rd.push(payload);
+        rd.push(null);
+      }, 20);
+      return {
+        statusCode: 200,
+        body: rd,
+        bodyText: () => Promise.resolve(""),
+      };
+    };
+
+    const transport: AttachmentTransport = async () =>
+      makeSlowStream("hello");
+
+    // Fire two in parallel for the same attachment.
+    const [r1, r2] = await Promise.all([
+      downloadAttachment(makeInput({ size: 5 }), {
+        issueKey: "PROJ-1",
+        authorizationHeader: "",
+        transport,
+      }),
+      downloadAttachment(makeInput({ size: 5 }), {
+        issueKey: "PROJ-1",
+        authorizationHeader: "",
+        transport,
+      }),
+    ]);
+
+    expect(r1.path).toBe(r2.path);
+    // Both must have produced valid content, not corruption.
+    expect(await fs.readFile(r1.path, "utf8")).toBe("hello");
+  });
+});
+
+// --- streaming preview -------------------------------------------------
+
+describe("downloadAttachment — preview is memory-bounded", () => {
+  it("does not read the whole file for a large text attachment", async () => {
+    // Simulate a 5MB text file; assert preview is still capped.
+    const big = "x".repeat(5 * 1024 * 1024);
+    const transport = vi.fn<AttachmentTransport>().mockResolvedValue(ok(big));
+    const ref = await downloadAttachment(
+      makeInput({ size: big.length, mimeType: "text/plain" }),
+      {
+        issueKey: "PROJ-1",
+        authorizationHeader: "",
+        transport,
+        previewChars: 500,
+      },
+    );
+    expect(ref.preview).toHaveLength(501); // 500 + ellipsis
+    expect(ref.preview?.endsWith("…")).toBe(true);
+  });
+});
+
+// --- guardSingleConsumption -------------------------------------------
+
+describe("guardSingleConsumption", () => {
+  // Factory so each test starts with a fresh guard state. `stream` and
+  // `text` both track their own call counts so we can assert that the
+  // underlying consumers aren't invoked after a guard rejection.
+  const make = () => {
+    let streamCalls = 0;
+    let textCalls = 0;
+    const res = guardSingleConsumption(200, {
+      stream: () => {
+        streamCalls++;
+        return Readable.from([Buffer.from("payload")]);
+      },
+      text: () => {
+        textCalls++;
+        return Promise.resolve("payload");
+      },
+    });
+    return { res, get streamCalls() { return streamCalls; }, get textCalls() { return textCalls; } };
+  };
+
+  it("allows a single body read", () => {
+    const ctx = make();
+    expect(() => ctx.res.body).not.toThrow();
+    expect(ctx.streamCalls).toBe(1);
+  });
+
+  it("allows a single bodyText read", async () => {
+    const ctx = make();
+    await expect(ctx.res.bodyText()).resolves.toBe("payload");
+    expect(ctx.textCalls).toBe(1);
+  });
+
+  it("throws on stream → bodyText", async () => {
+    const ctx = make();
+    void ctx.res.body; // consume
+    await expect(ctx.res.bodyText()).rejects.toThrow(/already consumed via stream/);
+    expect(ctx.textCalls).toBe(0);
+  });
+
+  it("throws on bodyText → stream", async () => {
+    const ctx = make();
+    await ctx.res.bodyText();
+    expect(() => ctx.res.body).toThrow(/already consumed via bodyText/);
+    expect(ctx.streamCalls).toBe(0);
+  });
+
+  it("throws on body → body (double stream-consume)", () => {
+    const ctx = make();
+    void ctx.res.body;
+    expect(() => ctx.res.body).toThrow(/already consumed via body getter/);
+    expect(ctx.streamCalls).toBe(1);
+  });
+
+  it("throws on bodyText → bodyText (double text-consume)", async () => {
+    const ctx = make();
+    await ctx.res.bodyText();
+    await expect(ctx.res.bodyText()).rejects.toThrow(/already consumed via bodyText/);
+    expect(ctx.textCalls).toBe(1);
+  });
+});

@@ -1,6 +1,8 @@
 # Jira MCP Server
 
-A Model Context Protocol (MCP) server that provides AI models with full access to Jira Cloud functionality via the REST API v3 and Agile API 1.0.
+A Model Context Protocol (MCP) server that gives AI agents access to Jira Cloud via the REST API v3 and Agile API 1.0.
+
+**v2.0 is a clean break from v1.** v1's 85 tools collapse into 16 consolidated tools (one per Jira category, action-discriminated). Responses are sandboxed to disk so a 100KB Jira payload doesn't blow up the agent's context window. v1 is still maintained on the [`1.x`](https://github.com/scottlepp/jira-mcp/tree/1.x) branch. See [docs/MIGRATION.md](docs/MIGRATION.md) for the upgrade path.
 
 ## Installation
 
@@ -8,7 +10,7 @@ A Model Context Protocol (MCP) server that provides AI models with full access t
 npx jira-mcp
 ```
 
-Or install globally:
+Or globally:
 
 ```bash
 npm install -g jira-mcp
@@ -16,38 +18,21 @@ npm install -g jira-mcp
 
 ## Configuration
 
-Set the following environment variables:
+Set these environment variables on the server process. With Claude Desktop or Claude Code that means the `env` block on the MCP server config.
 
 | Variable | Description | Required |
-|----------|-------------|----------|
-| `JIRA_HOST` | Your Jira instance URL (e.g., `https://yourcompany.atlassian.net`) | Yes |
-| `JIRA_EMAIL` | Your Atlassian account email | Yes |
+|---|---|---|
+| `JIRA_HOST` | Jira instance URL (e.g. `https://yourcompany.atlassian.net`) | Yes |
+| `JIRA_EMAIL` | Atlassian account email | Yes |
 | `JIRA_API_TOKEN` | API token from [Atlassian Account Settings](https://id.atlassian.com/manage-profile/security/api-tokens) | Yes |
-| `JIRA_ENABLED_CATEGORIES` | Comma-separated list of tool categories to enable (default: all) | No |
-| `JIRA_DISABLED_TOOLS` | Comma-separated list of specific tools to disable | No |
+| `JIRA_CLOUD_ID` | Cloud ID for scoped (ATATT/ATSTT) tokens; auto-fetched if omitted | No |
+| `JIRA_TOOL_MODE` | `"classic"` (default — 16 consolidated tools) or `"code-api"` (one tool, agent drives via the bundled `jira-cli` shell binary) | No |
+| `JIRA_ENABLED_CATEGORIES` | Comma-separated category whitelist. Empty = all 16 categories enabled. | No |
+| `JIRA_DISABLED_ACTIONS` | Comma-separated `category.action` blacklist. Enforced at the dispatch layer in **both** modes. | No |
 
-### Tool Filtering
+### Claude Desktop / Claude Code setup
 
-You can limit which tools are exposed to the AI model using environment variables:
-
-**Enable only specific categories:**
-```bash
-JIRA_ENABLED_CATEGORIES=issue,search,project
-```
-
-**Disable specific tools (e.g., destructive operations):**
-```bash
-JIRA_DISABLED_TOOLS=jira_delete_issue,jira_delete_project,jira_delete_comment
-```
-
-**Available categories:** `issue`, `search`, `project`, `user`, `board`, `sprint`, `epic`, `comment`, `attachment`, `worklog`, `issueLink`, `watcher`, `field`, `filter`, `group`, `server`
-
-## Claude Desktop Setup
-
-Add to your Claude Desktop configuration file:
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or your `~/.claude.json`:
 
 ```json
 {
@@ -65,166 +50,119 @@ Add to your Claude Desktop configuration file:
 }
 ```
 
-**With tool filtering (recommended for limited access):**
+## Tool surface
+
+Default mode is **classic**: 16 consolidated MCP tools, each taking an `action` argument plus action-specific args. For example `jira_issue` covers `get`, `create`, `update`, `delete`, `bulkCreate`, `listTransitions`, `transition`, `assign`, `changelog` — discriminated by `action: "..."`.
+
+### The 16 tools and their actions
+
+| Tool | Actions |
+|---|---|
+| `jira_issue` | get, create, update, delete, bulkCreate, listTransitions, transition, assign, changelog |
+| `jira_search` | issues, jqlAutocompleteData, jqlSuggestions |
+| `jira_comment` | list, add, update, delete |
+| `jira_user` | myself, search, get, assignable, bulkGet |
+| `jira_project` | list, get, create, update, delete, listComponents, createComponent, listVersions, createVersion, updateVersion, statuses |
+| `jira_board` | list, get, create, delete, configuration, issues, backlog, epics |
+| `jira_sprint` | listForBoard, get, create, update, delete, issues, moveIssues, moveIssuesToBacklog |
+| `jira_epic` | get, issues, moveIn, removeFromCurrent |
+| `jira_worklog` | list, add, update, delete |
+| `jira_attachment` | get, delete, meta |
+| `jira_filter` | list, get, create, update, delete, listFavourite |
+| `jira_link` | create, get, delete, types |
+| `jira_watcher` | list, add, remove, listVotes, addVote, removeVote |
+| `jira_field` | list, issueTypes, priorities, statuses, resolutions, createMeta |
+| `jira_group` | search, members, myPermissions |
+| `jira_server` | info |
+
+Every action returns a trimmed summary (e.g. `IssueSummary` with key, status, assignee, recent comments, attachment list) plus the full untrimmed body written to disk under `${TMPDIR}/jira-mcp/${session}/`. Agents read the full response only when they need the detail.
+
+### Tool filtering
+
+Two env vars cut the tool-list cost paid every conversation:
+
 ```json
-{
-  "mcpServers": {
-    "jira": {
-      "command": "npx",
-      "args": ["-y", "jira-mcp"],
-      "env": {
-        "JIRA_HOST": "https://yourcompany.atlassian.net",
-        "JIRA_EMAIL": "your-email@example.com",
-        "JIRA_API_TOKEN": "your-api-token",
-        "JIRA_ENABLED_CATEGORIES": "issue,search,project,comment",
-        "JIRA_DISABLED_TOOLS": "jira_delete_issue,jira_delete_project"
-      }
-    }
-  }
+"env": {
+  "JIRA_ENABLED_CATEGORIES": "issue,search,comment",
+  "JIRA_DISABLED_ACTIONS": "issue.delete,project.delete"
 }
 ```
 
-## Available Tools
+- `JIRA_ENABLED_CATEGORIES` — whitelist of consolidated tool categories (the part after `jira_`). Tools outside the whitelist drop from the listing.
+- `JIRA_DISABLED_ACTIONS` — `category.action` pairs (manifest operation names like `issue.delete`, `permissions.mine`, `vote.add`). Disabled actions are stripped from each tool's `oneOf` schema **and** rejected at dispatch time, so they're blocked even in code-api mode.
 
-### Issues
-- `jira_get_issue` - Get issue details
-- `jira_create_issue` - Create a new issue
-- `jira_update_issue` - Update an existing issue
-- `jira_delete_issue` - Delete an issue
-- `jira_bulk_create_issues` - Create multiple issues
-- `jira_get_issue_transitions` - Get available transitions
-- `jira_transition_issue` - Transition issue to new status
-- `jira_assign_issue` - Assign issue to user
-- `jira_get_issue_changelogs` - Get issue change history
+Concrete numbers from a recent benchmark run on a real Jira instance:
 
-### Search
-- `jira_search_issues` - Search issues using JQL
-- `jira_get_jql_autocomplete` - Get JQL autocomplete suggestions
+| filter | tool-list bytes | ~tokens | factor |
+|---|---|---|---|
+| none (16 tools) | 30.6KB | ~7,800 | 1× |
+| 3 categories | 6.3KB | ~1,600 | 5× |
+| 3 cats + 5 disabled actions | 4.6KB | ~1,200 | 6.6× |
+| code-api mode (1 tool) | 0.4KB | ~100 | 76× |
 
-### Projects
-- `jira_list_projects` - List all accessible projects
-- `jira_get_project` - Get project details
-- `jira_create_project` - Create a new project
-- `jira_update_project` - Update project
-- `jira_delete_project` - Delete project
-- `jira_get_project_components` - List project components
-- `jira_create_component` - Create component
-- `jira_get_project_versions` - List project versions
-- `jira_create_version` - Create version
-- `jira_update_version` - Update version
-- `jira_get_project_statuses` - Get project statuses
+For the full v1-vs-v2 picture (per-call cost, three scenarios, ratios) see [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
-### Users
-- `jira_get_current_user` - Get authenticated user
-- `jira_search_users` - Search for users
-- `jira_get_user` - Get user by account ID
-- `jira_get_assignable_users` - Find assignable users
-- `jira_bulk_get_users` - Get multiple users
+### code-api mode (recommended for shell-capable agents)
 
-### Boards (Agile)
-- `jira_list_boards` - List all boards
-- `jira_get_board` - Get board details
-- `jira_create_board` - Create a new board
-- `jira_delete_board` - Delete board
-- `jira_get_board_configuration` - Get board configuration
-- `jira_get_board_issues` - Get issues on board
-- `jira_get_board_backlog` - Get board backlog
-- `jira_get_board_epics` - Get epics on board
+If your agent can run shell commands (Claude Code, etc.), set `JIRA_TOOL_MODE=code-api` for a ~76× smaller tool-list footprint paid on every conversation. Per-call cost is essentially the same as classic, so the savings are pure win once your agent is making more than a few Jira calls.
 
-### Sprints (Agile)
-- `jira_list_sprints` - List sprints for board
-- `jira_get_sprint` - Get sprint details
-- `jira_create_sprint` - Create new sprint
-- `jira_update_sprint` - Update sprint
-- `jira_delete_sprint` - Delete sprint
-- `jira_get_sprint_issues` - Get issues in sprint
-- `jira_move_issues_to_sprint` - Move issues to sprint
-- `jira_move_issues_to_backlog` - Move issues to backlog
+Set `JIRA_TOOL_MODE=code-api` to expose a single MCP tool, `jira_code_api`. Calling it returns the path to the bundled `jira-cli` binary plus the `JIRA_MCP_SOCKET` address. The agent then drives Jira from a shell:
 
-### Epics (Agile)
-- `jira_get_epic` - Get epic details
-- `jira_get_epic_issues` - Get issues in epic
-- `jira_move_issues_to_epic` - Add issues to epic
-- `jira_remove_issues_from_epic` - Remove issues from epic
+```bash
+JIRA_MCP_SOCKET=/tmp/jira-mcp/${session}/ipc.sock \
+  node <cli-path> issue.get --issueIdOrKey=PROJ-1
+# stdout: trimmed summary as JSON, then a final `ref: /path` line
+# pointing at the full response on disk (`cat` it for detail).
+```
 
-### Comments
-- `jira_get_comments` - Get issue comments
-- `jira_add_comment` - Add comment to issue
-- `jira_update_comment` - Update comment
-- `jira_delete_comment` - Delete comment
+Discovery: `node <cli-path> --help` lists every operation; `node <cli-path> <op> --help` lists its flags.
 
-### Attachments
-- `jira_get_attachment` - Get attachment metadata
-- `jira_delete_attachment` - Delete attachment
-- `jira_get_attachment_content` - Download attachment
-- `jira_get_attachment_meta` - Get attachment settings
+Stays as `classic` by default because tool-only MCP clients (no shell access) can't drive `jira-cli`. See [docs/MIGRATION.md](docs/MIGRATION.md#code-api-mode) for the full flow.
 
-### Worklogs
-- `jira_get_worklogs` - Get worklogs for issue
-- `jira_add_worklog` - Add worklog entry
-- `jira_update_worklog` - Update worklog
-- `jira_delete_worklog` - Delete worklog
+### Standalone CLI (no MCP server)
 
-### Issue Links
-- `jira_create_issue_link` - Link two issues
-- `jira_get_issue_link` - Get issue link details
-- `jira_delete_issue_link` - Delete issue link
-- `jira_get_issue_link_types` - List available link types
+The same `jira-cli` binary works without an MCP server. Set `JIRA_HOST` / `JIRA_EMAIL` / `JIRA_API_TOKEN` in your shell (or a `.env.local` in the cwd) and invoke it directly:
 
-### Watchers & Voters
-- `jira_get_watchers` - Get issue watchers
-- `jira_add_watcher` - Add watcher to issue
-- `jira_remove_watcher` - Remove watcher
-- `jira_get_votes` - Get votes on issue
-- `jira_add_vote` - Add vote to issue
-- `jira_remove_vote` - Remove vote
+```bash
+export JIRA_HOST=https://yourcompany.atlassian.net
+export JIRA_EMAIL=you@example.com
+export JIRA_API_TOKEN=...
+npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli issue.get --issueIdOrKey=PROJ-1
+```
 
-### Fields & Metadata
-- `jira_get_fields` - Get all fields
-- `jira_get_issue_types` - Get all issue types
-- `jira_get_priorities` - Get all priorities
-- `jira_get_statuses` - Get all statuses
-- `jira_get_resolutions` - Get all resolutions
-- `jira_get_create_metadata` - Get fields required to create issues
+The CLI auto-selects between **bridge mode** (`JIRA_MCP_SOCKET` set, talks to a running server) and **direct mode** (no socket, builds a `JiraClient` in-process). Same trim + ref output either way; credentials never leave the CLI's `process.env`, so they don't enter the agent's context.
 
-### Filters
-- `jira_list_filters` - Search/list filters
-- `jira_get_filter` - Get filter details
-- `jira_create_filter` - Create saved filter
-- `jira_update_filter` - Update filter
-- `jira_delete_filter` - Delete filter
-- `jira_get_favourite_filters` - Get favorite filters
+For Claude Code users, install the skill once so the agent discovers the CLI on its own:
 
-### Groups & Permissions
-- `jira_search_groups` - Search for groups
-- `jira_get_group_members` - Get group members
-- `jira_get_my_permissions` - Get current user permissions
+```bash
+npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli install-skill
+```
 
-### Server
-- `jira_get_server_info` - Get Jira server info
+This writes `~/.claude/skills/jira/SKILL.md`. The skill loads on demand whenever the user mentions Jira and teaches the agent the canonical invocation, common operations, and `--help` discovery. Re-run with `--force` to update; `--print` dumps the rendered SKILL.md to stdout without writing.
 
-## Available Resources
+## Resources
 
-- `jira://projects` - List of all accessible projects
-- `jira://project/{key}` - Project details
-- `jira://issue/{key}` - Issue details
-- `jira://boards` - List of all boards
-- `jira://board/{id}` - Board details
-- `jira://sprint/{id}` - Sprint details
-- `jira://myself` - Current user info
+The server also exposes Jira data via MCP resources:
+
+- `jira://projects` — list of accessible projects
+- `jira://project/{key}` — project details
+- `jira://issue/{key}` — issue details
+- `jira://boards` — all boards
+- `jira://board/{id}` — board details
+- `jira://sprint/{id}` — sprint details
+- `jira://myself` — current user
 
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Build
-npm run build
-
-# Run with inspector
-npm run inspector
+npm run build           # tsc → build/
+npm test                # vitest, ~400 unit tests, no live Jira
+npm run benchmark       # measures tool-list + per-call bytes against live Jira
+npm run inspector       # @modelcontextprotocol/inspector against build/index.js
 ```
+
+The benchmark requires `.env.local` with the regular `JIRA_*` vars plus `JIRA_BENCH_TICKET_RICH` and `JIRA_BENCH_TICKET_SIMPLE` keys. To include v1 in the comparison, set up a sibling worktree once: `git worktree add ../jira-mcp-v1 v1.0.0 && (cd ../jira-mcp-v1 && npm install && npm run build)`. See [docs/BENCHMARK.md](docs/BENCHMARK.md) for the latest numbers.
 
 ## License
 
