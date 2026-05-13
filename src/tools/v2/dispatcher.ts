@@ -20,8 +20,11 @@ import {
   dispatch as toolkitDispatch,
   DispatchError,
   FULL_META_KEY as TOOLKIT_FULL_META_KEY,
+  ToolError,
   type ConsolidatedToolDef as ToolkitConsolidatedToolDef,
 } from "@scottlepper/mcp-toolkit/tool";
+
+export { ToolError };
 
 import type { JiraClient } from "../../auth/jira-client.js";
 import {
@@ -271,22 +274,6 @@ function zodFieldToJsonSchema(schema: ZodType): unknown {
 
 // --- Dispatch ----------------------------------------------------------
 
-// Extends the toolkit's `DispatchError` with the `tool` field jira-mcp
-// callers expect on the catch side. `err instanceof DispatchError`
-// stays true, so anything in the bridge / index.ts catch chain that
-// matches on the toolkit base class still works.
-export class ToolError extends DispatchError {
-  constructor(
-    message: string,
-    public readonly tool: string,
-    action: string | undefined,
-    public readonly cause?: unknown,
-  ) {
-    super(message, action ?? "");
-    this.name = "ToolError";
-  }
-}
-
 // Re-export the toolkit's full-flag key so call sites import it from
 // the dispatcher without depending on the toolkit directly.
 export const FULL_META_KEY = TOOLKIT_FULL_META_KEY;
@@ -323,13 +310,16 @@ export async function dispatchTool(
     );
     return result;
   } catch (err) {
-    // Wrap toolkit DispatchError / OperationError into the jira-shaped
-    // ToolError so callers can pull `.tool` off the catch.
+    // Re-shape the toolkit's `DispatchError` / manifest's
+    // `OperationError` as `ToolError` so callers can match on the
+    // tool-shaped class and read `.tool` directly. (Toolkit
+    // `dispatch()` always throws the base `DispatchError`; the
+    // `ToolError` subclass is opt-in.)
     if (err instanceof DispatchError) {
-      throw new ToolError(err.message, tool.name, err.action || undefined, err);
+      throw new ToolError(err.message, err.action, err.tool ?? tool.name);
     }
     if (err instanceof OperationError) {
-      throw new ToolError(err.message, tool.name, probableAction, err);
+      throw new ToolError(err.message, probableAction ?? "", tool.name);
     }
     throw err;
   }
