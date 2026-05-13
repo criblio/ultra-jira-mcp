@@ -83,8 +83,9 @@ describe("sanitizeFilename", () => {
     [".hidden", "hidden"],
     ["....weird.txt", "weird.txt"],
     // Empty or pure-separator input falls back to a stable placeholder.
-    ["", "attachment"],
-    ["///", "attachment"],
+    // Toolkit chooses "download" as the vendor-neutral fallback.
+    ["", "download"],
+    ["///", "download"],
   ])("sanitizes %s → %s", (input, expected) => {
     expect(sanitizeFilename(input)).toBe(expected);
   });

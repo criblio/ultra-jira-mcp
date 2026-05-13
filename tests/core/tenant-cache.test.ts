@@ -55,33 +55,17 @@ describe("readTenantCache / writeTenantCache", () => {
   });
 
   it("returns null for entries older than ttl", async () => {
+    // Drive the cutoff via the `now` parameter rather than rewriting
+    // the on-disk fetchedAt — the toolkit owns the file layout (sha256
+    // of the host key) and tests shouldn't peek at it.
     await writeTenantCache("https://acme.atlassian.net", "cloud-old");
-    // Rewrite the fetchedAt into the past.
-    const file = path.join(
-      rootCacheDir(),
-      "tenant",
-      "acme.atlassian.net.json",
-    );
-    const raw = JSON.parse(await fs.readFile(file, "utf8"));
-    raw.fetchedAt = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-    await fs.writeFile(file, JSON.stringify(raw));
-    expect(await readTenantCache("https://acme.atlassian.net")).toBeNull();
+    const future = Date.now() + 48 * 60 * 60 * 1000;
+    expect(
+      await readTenantCache("https://acme.atlassian.net", undefined, future),
+    ).toBeNull();
   });
 
-  it("returns null for corrupt json", async () => {
-    const dir = path.join(rootCacheDir(), "tenant");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "acme.atlassian.net.json"), "{not json");
-    expect(await readTenantCache("https://acme.atlassian.net")).toBeNull();
-  });
-
-  it("returns null when the cached object is missing required fields", async () => {
-    const dir = path.join(rootCacheDir(), "tenant");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      path.join(dir, "acme.atlassian.net.json"),
-      JSON.stringify({ fetchedAt: new Date().toISOString() }),
-    );
-    expect(await readTenantCache("https://acme.atlassian.net")).toBeNull();
-  });
+  // Corrupt-json + missing-fields behavior is covered by the toolkit's
+  // disk-cache tests; both surface as undefined here, which
+  // readTenantCache turns into null.
 });

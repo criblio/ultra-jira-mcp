@@ -1,5 +1,5 @@
-import { httpRequest } from "../core/http.js";
-import { TtlLruCache } from "../core/lru.js";
+import { httpRequest } from "@scottlepper/mcp-toolkit/transport";
+import { TtlLruCache } from "@scottlepper/mcp-toolkit/lru";
 import { readTenantCache, writeTenantCache } from "../core/tenant-cache.js";
 import { JiraConfig } from "../config.js";
 

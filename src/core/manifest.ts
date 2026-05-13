@@ -1,199 +1,48 @@
-// Central operation manifest.
+// Jira-specific manifest helpers.
 //
-// Single declaration of every Jira operation this server exposes. Two
-// consumers read this at runtime:
+// All generic manifest plumbing (Operation type, splitArgs,
+// interpolatePath, findOperation, query-param coercion, rawString body
+// handling, executor hook) lives in `@scottlepper/mcp-toolkit/manifest`.
+// This module:
 //
-//   - Layer 2 (classic MCP tools, PR #7): a consolidated tool like
-//     `jira_issue` takes `{ action, ...args }` and dispatches through
-//     `invokeOperation` against the manifest entry whose name matches.
+//   1. Extends `Operation` with `isAgile?: boolean` so existing entries
+//      in `operations.ts` keep their top-level `isAgile: true` field.
+//   2. Routes calls to `client.agileGet/Post/Put/Delete` when the op is
+//      marked agile, falling back to platform `get/post/put/delete`.
+//   3. Bakes the Jira trim registry into the high-level
+//      `invokeOperation` so consumers don't pass it on every call.
 //
-//   - Layer 3 (code-api): the bundled `jira-cli` binary reads this
-//     manifest to validate `<resource>.<op>` invocations from the
-//     command line, build `--help` output, and forward calls over
-//     the local IPC bridge. Per-session uniqueness is handled at
-//     runtime by `JIRA_MCP_SOCKET`.
-//
-// The manifest is deliberately stringly-typed: operations declare
-// their params by name + role (path/query/body), not by a static
-// TypeScript shape. Validation/coercion is the CLI's job. Keeping
-// the manifest shape small means we can iterate it generically
-// without type gymnastics.
+// Layer 2 (consolidated classic tools) calls `invokeOperation`.
+// Layer 3 (bridge handler) calls `invokeOperationRaw` so it can
+// sandbox the full response and only apply the trim to the summary.
+
+import {
+  type ExecuteFn,
+  type Operation as ToolkitOperation,
+  invokeOperation as toolkitInvokeOperation,
+  invokeOperationRaw as toolkitInvokeOperationRaw,
+} from "@scottlepper/mcp-toolkit/manifest";
 
 import type { JiraClient } from "../auth/jira-client.js";
 import { trimRegistry, type TrimKey } from "./trim-registry.js";
 
-// --- Types ------------------------------------------------------------
+// --- Re-exports -------------------------------------------------------
 
-export type HttpVerb = "GET" | "POST" | "PUT" | "DELETE";
+export {
+  OperationError,
+  extractPathParams,
+  interpolatePath,
+  splitArgs,
+  findOperation,
+  defaultExecute,
+} from "@scottlepper/mcp-toolkit/manifest";
 
-export type ParamRole = "path" | "query" | "body";
+import { OperationError } from "@scottlepper/mcp-toolkit/manifest";
 
-export interface ParamSpec {
-  name: string;
-  role: ParamRole;
-  required?: boolean;
-  description?: string;
-}
-
-// How the request body is shaped on the wire.
-//
-//   "object"    (default) — body params are wrapped into a single
-//                JSON object: { paramA: ..., paramB: ... }. This is
-//                what 99% of Jira endpoints expect.
-//   "rawString" — the operation must declare exactly one body param.
-//                That param's value is sent as a raw JSON string body
-//                (e.g. `"acc123"`, with quotes). Required by the
-//                handful of Jira endpoints that take a bare scalar
-//                rather than an object — most notably
-//                POST /issue/{key}/watchers, which expects the
-//                accountId as a JSON-encoded string.
-export type BodyShape = "object" | "rawString";
-
-export interface Operation {
-  // Stable identifier — stable across v2 minor versions. The CLI
-  // accepts this verbatim as its positional argument
-  // (`jira-cli issue.get ...`) and uses it to look up the right
-  // entry in the manifest.
-  name: string;
-  // Human-readable single-line summary. Surfaces in `jira-cli --help`
-  // listings and in Layer 2 tool schemas.
-  description: string;
-  verb: HttpVerb;
-  // Path template with `{paramName}` placeholders. Every placeholder
-  // must appear in `params` with `role: "path"`.
-  pathTemplate: string;
-  // Agile API vs Platform API — affects base URL selection. Mirrors
-  // the existing `isAgile` boolean in JiraClient.
-  isAgile?: boolean;
-  params: ParamSpec[];
-  // How body params are serialized on the wire. Defaults to "object".
-  bodyShape?: BodyShape;
-  // Optional: trim projection applied to the response before returning.
-  // Looked up by key in the trim registry; the generator and the
-  // dispatcher both resolve it at call time.
-  trim?: TrimKey;
-}
-
-export type Manifest = readonly Operation[];
-
-// --- Path templating ---------------------------------------------------
-
-// Extract all `{name}` placeholders from a template. Exported because
-// the manifest test suite asserts every placeholder shows up as a
-// `role: "path"` param.
-export function extractPathParams(template: string): string[] {
-  const out: string[] = [];
-  const re = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
-  for (const match of template.matchAll(re)) out.push(match[1]);
-  return out;
-}
-
-// Substitute `{name}` placeholders with URI-encoded values from args.
-// Throws if a required placeholder is missing — callers should have
-// validated already, but the dispatcher double-checks.
-export function interpolatePath(
-  template: string,
-  args: Record<string, unknown>,
-): string {
-  return template.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
-    const value = args[name];
-    if (value === undefined || value === null) {
-      throw new Error(`Missing required path parameter: ${name}`);
-    }
-    return encodeURIComponent(String(value));
-  });
-}
-
-// --- Argument partitioning ---------------------------------------------
-
-// Split a flat args bag into path/query/body buckets based on the
-// operation's param spec. Unknown args are collected separately so the
-// dispatcher can decide whether to reject or ignore them.
-export interface SplitArgs {
-  pathParams: Record<string, unknown>;
-  queryParams: Record<string, unknown>;
-  body: Record<string, unknown> | undefined;
-  unknown: string[];
-  missingRequired: string[];
-}
-
-export function splitArgs(
-  op: Operation,
-  args: Record<string, unknown>,
-): SplitArgs {
-  const pathParams: Record<string, unknown> = {};
-  const queryParams: Record<string, unknown> = {};
-  const body: Record<string, unknown> = {};
-  const known = new Set<string>();
-  const missingRequired: string[] = [];
-  let hasBody = false;
-
-  for (const spec of op.params) {
-    known.add(spec.name);
-    const raw = args[spec.name];
-    // Treat explicit null the same as undefined: it can't satisfy a
-    // required param, and it'd be wrong to forward as a path segment
-    // or JSON body value. Falling through would produce a plain Error
-    // from interpolatePath instead of the OperationError callers
-    // expect.
-    if (raw === undefined || raw === null) {
-      if (spec.required) missingRequired.push(spec.name);
-      continue;
-    }
-    switch (spec.role) {
-      case "path":
-        pathParams[spec.name] = raw;
-        break;
-      case "query":
-        queryParams[spec.name] = raw;
-        break;
-      case "body":
-        body[spec.name] = raw;
-        hasBody = true;
-        break;
-    }
-  }
-
-  const unknown = Object.keys(args).filter((k) => !known.has(k));
-
-  return {
-    pathParams,
-    queryParams,
-    body: hasBody ? body : undefined,
-    unknown,
-    missingRequired,
-  };
-}
-
-// --- Dispatcher --------------------------------------------------------
-
-export class OperationError extends Error {
-  constructor(message: string, public readonly operationName: string) {
-    super(message);
-    this.name = "OperationError";
-  }
-}
-
-// Look up an operation by name, throwing OperationError on miss. Used
-// by both invokeOperation and invokeOperationRaw so the bridge layer
-// can resolve an op to inspect its `trim` field separately from
-// running the call.
-export function findOperation(manifest: Manifest, name: string): Operation {
-  const op = manifest.find((o) => o.name === name);
-  if (!op) {
-    throw new OperationError(`Unknown operation: ${name}`, name);
-  }
-  return op;
-}
-
-// Throw if the operation is on the user's disabled list. Surfaces as
-// an OperationError so it propagates uniformly through both classic
-// dispatch and the bridge handler.
-//
-// `disabledActions` is the raw list from JIRA_DISABLED_ACTIONS — a Set
-// would be tighter, but the list is short (typically <20 entries) and
-// callers already pass strings, so the array form keeps the public
-// signature simple.
+// Override the toolkit's generic "Operation X is disabled." message
+// with one that names the env var the user needs to edit. The bridge
+// dispatcher calls this directly, and integration tests assert on the
+// JIRA_DISABLED_ACTIONS hint to confirm the right knob is documented.
 export function assertOperationEnabled(
   name: string,
   disabledActions: readonly string[] | undefined,
@@ -207,17 +56,87 @@ export function assertOperationEnabled(
   }
 }
 
-// Executes an operation against a JiraClient and returns the *raw*
-// response — no trim projection applied. Used by Layer 3's bridge
-// handler, which wants to write the full response to disk via
-// `sandbox()` and apply the trim only to the in-band `summary`.
+export type {
+  HttpVerb,
+  ParamRole,
+  ParamSpec,
+  BodyShape,
+  SplitArgs,
+  ExecuteContext,
+  ExecuteFn,
+  InvokeOptions,
+} from "@scottlepper/mcp-toolkit/manifest";
+
+// --- Jira extensions --------------------------------------------------
+
+// `isAgile` lives at the top level (rather than under `meta`) because
+// the existing operations.ts declares hundreds of entries with
+// `isAgile: true`. Moving it under `meta` would be churn for no benefit.
+// `trim` is narrowed to the typed TrimKey so the registry lookup is
+// type-safe at the call site.
+export interface Operation extends Omit<ToolkitOperation, "trim"> {
+  isAgile?: boolean;
+  trim?: TrimKey;
+}
+
+export type Manifest = readonly Operation[];
+
+// Factory for an executor closure that runs the
+// JIRA_DISABLED_ACTIONS-aware disabled check before delegating to
+// `executeJiraOp`. Both the bridge and the consolidated-tool
+// dispatcher use this with the toolkit's generic dispatch, which
+// otherwise would throw a generic "Operation X is disabled." message
+// that doesn't name the env var users need to edit.
 //
-// Layer 2 callers should keep using `invokeOperation` (which trims
-// in-place) so consolidated tools return the compact shape directly.
-//
-// `disabledActions` (optional) is the user's JIRA_DISABLED_ACTIONS
-// blocklist. Enforced here — at the only point both modes funnel
-// through — so the safety guarantee survives a code-api opt-in.
+// `disabledActions` is captured in the closure and checked at the
+// top of every dispatched op — the toolkit's own check is bypassed
+// by callers passing `undefined` for the toolkit's `disabledActions`
+// option.
+export function makeJiraExecutor(
+  disabledActions?: readonly string[],
+): ExecuteFn {
+  return async (ctx) => {
+    assertOperationEnabled(ctx.op.name, disabledActions);
+    return executeJiraOp(ctx);
+  };
+}
+
+// Routes a fully-resolved operation call to the right JiraClient method.
+// Inspects `op.isAgile` to pick between `client.agile*` and `client.*`.
+// Exported so the bridge can compose it with `assertOperationEnabled`
+// to surface the JIRA_DISABLED_ACTIONS-aware message before any HTTP
+// call.
+export const executeJiraOp: ExecuteFn = async (ctx) => {
+  const op = ctx.op as Operation;
+  const client = ctx.client as JiraClient;
+  const { path, queryParams, body } = ctx;
+
+  if (op.isAgile) {
+    switch (op.verb) {
+      case "GET":
+        return client.agileGet(path, queryParams);
+      case "POST":
+        return client.agilePost(path, body, queryParams);
+      case "PUT":
+        return client.agilePut(path, body, queryParams);
+      case "DELETE":
+        return client.agileDelete(path, queryParams);
+    }
+  }
+  switch (op.verb) {
+    case "GET":
+      return client.get(path, queryParams);
+    case "POST":
+      return client.post(path, body, queryParams);
+    case "PUT":
+      return client.put(path, body, queryParams);
+    case "DELETE":
+      return client.delete(path, queryParams);
+  }
+};
+
+// --- Dispatcher wrappers ----------------------------------------------
+
 export async function invokeOperationRaw(
   manifest: Manifest,
   client: JiraClient,
@@ -225,99 +144,21 @@ export async function invokeOperationRaw(
   args: Record<string, unknown>,
   disabledActions?: readonly string[],
 ): Promise<{ op: Operation; response: unknown }> {
-  const op = findOperation(manifest, name);
+  // Check disabled actions ourselves so the OperationError message
+  // names JIRA_DISABLED_ACTIONS. The toolkit's internal check (which
+  // would throw a generic message) becomes a no-op once we've
+  // filtered out disabled ops here.
   assertOperationEnabled(name, disabledActions);
-
-  const split = splitArgs(op, args);
-  if (split.missingRequired.length > 0) {
-    throw new OperationError(
-      `Missing required param(s) for ${name}: ${split.missingRequired.join(", ")}`,
-      name,
-    );
-  }
-
-  const path = interpolatePath(op.pathTemplate, split.pathParams);
-  // Normalize query params into the Record<string, string|number|boolean>
-  // shape JiraClient expects.
-  const query: Record<string, string | number | boolean | undefined> = {};
-  for (const [k, v] of Object.entries(split.queryParams)) {
-    if (v === undefined || v === null) continue;
-    if (Array.isArray(v)) {
-      // Jira's convention for list params is comma-separated.
-      query[k] = v.map((x) => String(x)).join(",");
-    } else if (
-      typeof v === "string" ||
-      typeof v === "number" ||
-      typeof v === "boolean"
-    ) {
-      query[k] = v;
-    } else {
-      query[k] = JSON.stringify(v);
-    }
-  }
-
-  // Reshape the body if the operation uses a non-default shape.
-  // For "rawString", the operation must declare exactly one body
-  // param; we forward its raw value so JiraClient.post (which calls
-  // JSON.stringify on whatever it receives) emits a JSON-encoded
-  // string like `"acc123"` rather than `{"accountId":"acc123"}`.
-  let bodyToSend: unknown = split.body;
-  if (op.bodyShape === "rawString") {
-    const bodyParamSpecs = op.params.filter((p) => p.role === "body");
-    if (bodyParamSpecs.length !== 1) {
-      throw new OperationError(
-        `Operation ${op.name} declared bodyShape="rawString" but has ${bodyParamSpecs.length} body params (must be exactly 1)`,
-        op.name,
-      );
-    }
-    const onlyName = bodyParamSpecs[0].name;
-    bodyToSend =
-      split.body && Object.prototype.hasOwnProperty.call(split.body, onlyName)
-        ? split.body[onlyName]
-        : undefined;
-  }
-
-  let response: unknown;
-  if (op.isAgile) {
-    switch (op.verb) {
-      case "GET":
-        response = await client.agileGet(path, query);
-        break;
-      case "POST":
-        response = await client.agilePost(path, bodyToSend, query);
-        break;
-      case "PUT":
-        response = await client.agilePut(path, bodyToSend, query);
-        break;
-      case "DELETE":
-        response = await client.agileDelete(path, query);
-        break;
-    }
-  } else {
-    switch (op.verb) {
-      case "GET":
-        response = await client.get(path, query);
-        break;
-      case "POST":
-        response = await client.post(path, bodyToSend, query);
-        break;
-      case "PUT":
-        response = await client.put(path, bodyToSend, query);
-        break;
-      case "DELETE":
-        response = await client.delete(path, query);
-        break;
-    }
-  }
-
-  return { op, response };
+  const result = await toolkitInvokeOperationRaw(
+    manifest,
+    client,
+    name,
+    args,
+    { execute: executeJiraOp },
+  );
+  return { op: result.op as Operation, response: result.response };
 }
 
-// Executes an operation by name against a JiraClient. Returns the
-// (optionally trimmed) response. This is the entry point Layer 2
-// (classic tools) uses; Layer 3 (the bridge) uses invokeOperationRaw
-// directly so it can sandbox the full response while still applying
-// the trim to the summary.
 export async function invokeOperation(
   manifest: Manifest,
   client: JiraClient,
@@ -325,16 +166,8 @@ export async function invokeOperation(
   args: Record<string, unknown>,
   disabledActions?: readonly string[],
 ): Promise<unknown> {
-  const { op, response } = await invokeOperationRaw(
-    manifest,
-    client,
-    name,
-    args,
-    disabledActions,
-  );
-  if (op.trim) {
-    const projection = trimRegistry[op.trim];
-    return projection(response);
-  }
-  return response;
+  assertOperationEnabled(name, disabledActions);
+  return toolkitInvokeOperation(manifest, client, name, args, trimRegistry, {
+    execute: executeJiraOp,
+  });
 }

@@ -101,14 +101,14 @@ describe("dispatchTool", () => {
   it("rejects when action is missing", async () => {
     const { client } = makeMockClient();
     await expect(dispatchTool(fixtureTool, fixtureManifest, client, {})).rejects.toBeInstanceOf(ToolError);
-    await expect(dispatchTool(fixtureTool, fixtureManifest, client, {})).rejects.toThrow(/requires.*action/);
+    await expect(dispatchTool(fixtureTool, fixtureManifest, client, {})).rejects.toThrow(/missing required.*action/);
   });
 
   it("rejects unknown actions with the list of known ones", async () => {
     const { client } = makeMockClient();
     await expect(
       dispatchTool(fixtureTool, fixtureManifest, client, { action: "nope" }),
-    ).rejects.toThrow(/Unknown action.*Known: get, create/);
+    ).rejects.toThrow(/unknown action.*Valid: get, create/);
   });
 
   it("rejects when args fail Zod validation", async () => {
@@ -116,7 +116,7 @@ describe("dispatchTool", () => {
     await expect(
       // missing required `id`
       dispatchTool(fixtureTool, fixtureManifest, client, { action: "get" }),
-    ).rejects.toThrow(/Invalid args.*jira_fx\.get/);
+    ).rejects.toThrow(/jira_fx\.get.*invalid args/);
   });
 
   it("strips `action` before passing args to invokeOperation", async () => {

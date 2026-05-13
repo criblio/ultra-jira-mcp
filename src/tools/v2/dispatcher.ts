@@ -14,15 +14,25 @@
 // `ConsolidatedTool` definition. The dispatcher is the same for
 // every tool.
 
-import { z, ZodError, type ZodType } from "zod";
+import type { ZodType } from "zod";
+
+import {
+  dispatch as toolkitDispatch,
+  DispatchError,
+  FULL_META_KEY as TOOLKIT_FULL_META_KEY,
+  ToolError,
+  type ConsolidatedToolDef as ToolkitConsolidatedToolDef,
+} from "@scottlepper/mcp-toolkit/tool";
+
+export { ToolError };
 
 import type { JiraClient } from "../../auth/jira-client.js";
 import {
-  invokeOperation,
-  invokeOperationRaw,
+  makeJiraExecutor,
   OperationError,
   type Manifest,
 } from "../../core/manifest.js";
+import { trimRegistry } from "../../core/trim-registry.js";
 
 // --- Tool definition shape --------------------------------------------
 
@@ -123,7 +133,7 @@ export function buildInputSchema(tool: ConsolidatedTool): unknown {
     tool.description,
     "Actions:",
     ...perActionLines,
-    "Pass `full: true` to bypass the summary projection and return the raw Jira API response. Useful when the default summary drops content you need.",
+    "Pass `full: true` on read (GET) actions to bypass the summary projection and return the raw Jira API response. Useful when the default summary drops content you need. Mutation actions reject `full: true` — their responses are already minimal.",
   ].join("\n");
 
   // Spread `merged` first so a (defensively-skipped) collision can
@@ -264,110 +274,53 @@ function zodFieldToJsonSchema(schema: ZodType): unknown {
 
 // --- Dispatch ----------------------------------------------------------
 
-export class ToolError extends Error {
-  constructor(
-    message: string,
-    public readonly tool: string,
-    public readonly action: string | undefined,
-    public readonly cause?: unknown,
-  ) {
-    super(message);
-    this.name = "ToolError";
-  }
-}
-
-const ActionKeySchema = z.object({ action: z.string() }).passthrough();
-
-// Meta-arg the dispatcher peels off before per-action Zod validation.
-// `full: true` skips the trim projection so the agent gets the raw
-// Jira API response — the escape hatch for actions whose summary
-// drops content the agent needs (e.g. `comment.list` returns just a
-// count by default; `full: true` returns every comment body).
-const FullFlagSchema = z.object({ full: z.boolean().optional() }).passthrough();
-export const FULL_META_KEY = "full";
+// Re-export the toolkit's full-flag key so call sites import it from
+// the dispatcher without depending on the toolkit directly.
+export const FULL_META_KEY = TOOLKIT_FULL_META_KEY;
 
 export async function dispatchTool(
   tool: ConsolidatedTool,
   manifest: Manifest,
   client: JiraClient,
   rawArgs: Record<string, unknown>,
-  // Optional. Forwarded to invokeOperation so a JIRA_DISABLED_ACTIONS
-  // entry blocks the call before any Jira HTTP request happens.
   disabledActions?: readonly string[],
 ): Promise<unknown> {
-  // Pull off `action`. Anything missing or wrong-typed is a caller
-  // error and stops here with a clear message.
-  const parsed = ActionKeySchema.safeParse(rawArgs);
-  if (!parsed.success) {
-    throw new ToolError(
-      `Tool ${tool.name} requires a string \`action\` arg. Got: ${JSON.stringify(rawArgs)}`,
-      tool.name,
-      undefined,
-      parsed.error,
-    );
-  }
-  const action = parsed.data.action;
-  const def = tool.actions[action];
-  if (!def) {
-    const known = Object.keys(tool.actions).join(", ");
-    throw new ToolError(
-      `Unknown action "${action}" for tool ${tool.name}. Known: ${known}`,
-      tool.name,
-      action,
-    );
-  }
-
-  // Peel off the `full` meta-arg before per-action Zod validation.
-  // `full: true` skips the trim projection so callers can opt into
-  // the raw Jira response when the trimmed shape drops content they
-  // need. We strip it here (not in the action schemas) so every
-  // trimmed action gets the escape hatch automatically — see
-  // FullFlagSchema above for the rationale.
-  const fullParsed = FullFlagSchema.safeParse(rawArgs);
-  const wantFull = fullParsed.success && fullParsed.data.full === true;
-
-  // Validate the rest of the args against this action's schema.
-  // Drop `action` and `full` from the input first so they don't show
-  // up in strict schemas as unknown fields.
-  const { action: _drop, [FULL_META_KEY]: _drop2, ...rest } = rawArgs;
-  const validated = def.schema.safeParse(rest);
-  if (!validated.success) {
-    throw new ToolError(
-      `Invalid args for ${tool.name}.${action}: ${zodErrorMessage(validated.error)}`,
-      tool.name,
-      action,
-      validated.error,
-    );
-  }
+  // Captured before the toolkit's dispatch runs so we can attach it to
+  // OperationError wraps below (the operation name carried on
+  // OperationError isn't always equal to the user-visible action key).
+  const probableAction =
+    typeof rawArgs.action === "string" ? rawArgs.action : undefined;
 
   try {
-    if (wantFull) {
-      const { response } = await invokeOperationRaw(
+    const { result } = await toolkitDispatch(
+      tool as ToolkitConsolidatedToolDef,
+      rawArgs,
+      {
         manifest,
         client,
-        def.operation,
-        validated.data as Record<string, unknown>,
-        disabledActions,
-      );
-      return response;
-    }
-    return await invokeOperation(
-      manifest,
-      client,
-      def.operation,
-      validated.data as Record<string, unknown>,
-      disabledActions,
+        trimRegistry,
+        invokeOptions: {
+          // Disabled-action enforcement runs inside makeJiraExecutor so
+          // the OperationError mentions JIRA_DISABLED_ACTIONS. We
+          // deliberately do not pass disabledActions to the toolkit
+          // (its check would run first and throw a generic message).
+          execute: makeJiraExecutor(disabledActions),
+        },
+      },
     );
+    return result;
   } catch (err) {
+    // Re-shape the toolkit's `DispatchError` / manifest's
+    // `OperationError` as `ToolError` so callers can match on the
+    // tool-shaped class and read `.tool` directly. (Toolkit
+    // `dispatch()` always throws the base `DispatchError`; the
+    // `ToolError` subclass is opt-in.)
+    if (err instanceof DispatchError) {
+      throw new ToolError(err.message, err.action, err.tool ?? tool.name);
+    }
     if (err instanceof OperationError) {
-      throw new ToolError(err.message, tool.name, action, err);
+      throw new ToolError(err.message, probableAction ?? "", tool.name);
     }
     throw err;
   }
-}
-
-function zodErrorMessage(err: ZodError): string {
-  return err.issues
-    .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-    .join("; ");
 }

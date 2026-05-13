@@ -5,56 +5,45 @@
 // address; the agent then drives Jira through that CLI from its own
 // shell and never calls an MCP tool again for reads.
 //
-// The handler is stateless — the heavy lifting (CLI binary already
-// built into the package + bridge startup) happens once at server
-// boot in `src/index.ts`. We just describe to the agent what was
-// set up.
-//
-// Earlier revisions of this tool advertised a directory of generated
-// TypeScript stubs for the agent to import via `npx tsx -e`. That
-// shape kept tripping the agent on tsx runtime quirks (top-level
-// await under CJS, `.js` → `.ts` resolver skipping paths under
-// `/node_modules/`). The CLI handoff collapses Bash → npx → tsx →
-// esbuild → node → import resolution → IPC down to Bash → binary →
-// IPC, which is the same call surface every other shell tool the
-// agent uses already has.
+// The toolkit owns the tool definition shape and the wiring contract;
+// we override `buildResponse` with Jira-specific hints (the canonical
+// `issue.get` example and the subtasks JQL gotcha) that historically
+// saved first-use sessions multiple wasted calls.
 
-export interface CodeApiToolContext {
-  cliPath: string;       // absolute path to the jira-cli binary
-  socketAddress: string; // value placed in JIRA_MCP_SOCKET
-}
+import { createCodeApiTool } from "@scottlepper/mcp-toolkit/code-api";
+
+export type {
+  CodeApiToolContext,
+  CodeApiToolResponse,
+} from "@scottlepper/mcp-toolkit/code-api";
+
+import type {
+  CodeApiToolContext,
+  CodeApiToolResponse,
+} from "@scottlepper/mcp-toolkit/code-api";
 
 export const JIRA_CODE_API_TOOL_NAME = "jira_code_api";
 
-// Description text rendered in the MCP tool listing. Kept tight so
-// the listing token cost stays under the ~500-token target the plan
-// quotes for Layer 3.
-export const JIRA_CODE_API_TOOL_DESCRIPTION =
+const JIRA_CODE_API_TOOL_DESCRIPTION =
   "Access Jira via the bundled jira-cli shell binary. Call once to " +
   "get the binary path and JIRA_MCP_SOCKET address; every subsequent " +
   "call is a `jira-cli <op> --flag=value` invocation that returns a " +
   "trimmed summary on stdout and a ref path to the full response.";
 
-export const jiraCodeApiToolDefinition = {
-  name: JIRA_CODE_API_TOOL_NAME,
+// Use the toolkit for the tool definition (name, schema, description
+// contract). We ignore its `buildResponse` and provide a Jira-flavored
+// one below — the toolkit's generic snippet uses `<op> --flag=value`
+// placeholders, but jira-mcp tests assert on the concrete `issue.get`
+// example and the subtasks JQL hint that were tuned from real
+// first-use sessions.
+const { definition } = createCodeApiTool({
+  toolName: JIRA_CODE_API_TOOL_NAME,
+  cliBinaryName: "jira-cli",
+  socketEnvVar: "JIRA_MCP_SOCKET",
   description: JIRA_CODE_API_TOOL_DESCRIPTION,
-  inputSchema: {
-    type: "object",
-    properties: {},
-    required: [],
-    additionalProperties: false,
-  },
-} as const;
+});
 
-// Body returned by a successful invocation. Stays under 1KB so the
-// agent's first call doesn't blow the budget the rest of the session
-// is supposed to save.
-export interface CodeApiToolResponse {
-  cli: string;
-  socketEnv: string;
-  socketAddress: string;
-  usage: string;
-}
+export const jiraCodeApiToolDefinition = definition;
 
 export function buildCodeApiToolResponse(
   ctx: CodeApiToolContext,

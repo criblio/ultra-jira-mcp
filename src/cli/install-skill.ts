@@ -14,9 +14,10 @@
 // unless --force is passed. --print dumps to stdout for users who
 // want to inspect or hand-place the file.
 
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import {
+  installSkill as toolkitInstallSkill,
+  type InstallSkillResult,
+} from "@scottlepper/mcp-toolkit/cli";
 
 // SKILL.md body. The trigger description is deliberately conservative:
 // "explicit mention of Jira / JQL / ticket lookup" rather than "any
@@ -104,44 +105,20 @@ export interface InstallSkillOpts {
   targetDir?: string;
 }
 
-export interface InstallSkillResult {
-  // Where the file was written (or would be written, in --print mode).
-  // Always the resolved absolute path, with ~ expanded.
-  path: string;
-  // What action was taken: "wrote" (new file), "overwrote" (--force
-  // replaced an existing file), "exists" (refused — file already
-  // present and --force not set), or "printed" (--print dumped to
-  // stdout, no file touched).
-  action: "wrote" | "overwrote" | "exists" | "printed";
-}
+export type { InstallSkillResult };
 
+// Wraps the toolkit's generic skill installer with the Jira slug + the
+// local SKILL_CONTENT pre-baked. Public surface unchanged so the test
+// continues to call `installSkill({ targetDir })` and assert on
+// SKILL_CONTENT roundtrip.
 export async function installSkill(
   opts: InstallSkillOpts = {},
 ): Promise<InstallSkillResult> {
-  const dir = opts.targetDir ?? path.join(os.homedir(), ".claude", "skills", "jira");
-  const file = path.join(dir, "SKILL.md");
-
-  if (opts.print) {
-    return { path: file, action: "printed" };
-  }
-
-  let existed = false;
-  try {
-    await fs.access(file);
-    existed = true;
-  } catch {
-    // Doesn't exist — that's the happy path.
-  }
-
-  if (existed && !opts.force) {
-    return { path: file, action: "exists" };
-  }
-
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(file, SKILL_CONTENT, "utf8");
-
-  return {
-    path: file,
-    action: existed ? "overwrote" : "wrote",
-  };
+  return toolkitInstallSkill({
+    content: SKILL_CONTENT,
+    slug: "jira",
+    force: opts.force,
+    print: opts.print,
+    targetDir: opts.targetDir,
+  });
 }

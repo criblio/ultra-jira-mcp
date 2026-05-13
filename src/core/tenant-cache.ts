@@ -4,30 +4,36 @@
 // re-fetched it every cold start via `/_edge/tenant_info`. Caching it
 // under the session cache root makes warm starts free.
 //
-// Layout:
-//   ${rootCacheDir}/tenant/${hostKey}.json
-//     { "cloudId": "...", "fetchedAt": "ISO-8601" }
+// The on-disk format and path layout are owned by the toolkit's
+// `core/disk-cache`. We:
+//   - derive a stable host key (the public `hostKey()` is preserved
+//     because tests assert on its transformation);
+//   - pass the host key as the cache key (the toolkit hashes it
+//     before becoming a filename);
+//   - default the TTL to 24h, since the cloudId effectively never
+//     changes.
 //
-// Keyed by host rather than session id so the cache survives across
-// sessions. TTL is 24h by default — plenty of headroom for the
-// "never actually changes" reality.
+// Filename layout after the swap:
+//   ${rootCacheDir}/tenant/<sha256(hostKey)>.json
+//     { "v": "<cloudId>", "fetchedAt": "ISO-8601" }
+// (Previously: ${rootCacheDir}/tenant/<hostKey>.json with the raw
+// cloudId field; both old and new entries live in the same scope
+// directory, so the directory cleanup pattern in tests still works.)
 
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
+import {
+  readDiskCache,
+  writeDiskCache,
+} from "@scottlepper/mcp-toolkit/disk-cache";
 
-import { rootCacheDir } from "./sandbox.js";
+import { jiraSandbox } from "./sandbox.js";
 
-const TENANT_DIR_NAME = "tenant";
+const SCOPE = "tenant";
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 
-interface TenantCacheEntry {
-  cloudId: string;
-  fetchedAt: string;
-}
-
-// Host → a safe filename. We can't just use the host verbatim because
-// it contains a `/` after the scheme. Strip the scheme and any path,
-// and replace unsafe characters.
+// Host → a safe key. We can't just use the host verbatim because it
+// contains a `/` after the scheme. Strip the scheme and any path, and
+// replace unsafe characters. Kept exported because tests assert the
+// transformation directly.
 export function hostKey(host: string): string {
   return host
     .replace(/^https?:\/\//i, "")
@@ -36,8 +42,12 @@ export function hostKey(host: string): string {
     .replace(/[^a-z0-9.-]/g, "_");
 }
 
-function tenantPath(host: string): string {
-  return path.join(rootCacheDir(), TENANT_DIR_NAME, `${hostKey(host)}.json`);
+function cacheOpts(ttlMs: number) {
+  return {
+    rootDir: jiraSandbox.rootCacheDir(),
+    scope: SCOPE,
+    ttlMs,
+  };
 }
 
 export async function readTenantCache(
@@ -45,39 +55,14 @@ export async function readTenantCache(
   ttlMs: number = DEFAULT_TTL_MS,
   now: number = Date.now(),
 ): Promise<string | null> {
-  const file = tenantPath(host);
-  let raw: string;
-  try {
-    raw = await fs.readFile(file, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-
-  let entry: TenantCacheEntry;
-  try {
-    entry = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-
-  if (typeof entry.cloudId !== "string" || typeof entry.fetchedAt !== "string") {
-    return null;
-  }
-
-  const fetchedAt = Date.parse(entry.fetchedAt);
-  if (Number.isNaN(fetchedAt)) return null;
-  if (now - fetchedAt > ttlMs) return null;
-
-  return entry.cloudId;
+  const value = await readDiskCache<string>(cacheOpts(ttlMs), hostKey(host), now);
+  if (typeof value !== "string") return null;
+  return value;
 }
 
-export async function writeTenantCache(host: string, cloudId: string): Promise<void> {
-  const file = tenantPath(host);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const entry: TenantCacheEntry = {
-    cloudId,
-    fetchedAt: new Date().toISOString(),
-  };
-  await fs.writeFile(file, JSON.stringify(entry, null, 2), "utf8");
+export async function writeTenantCache(
+  host: string,
+  cloudId: string,
+): Promise<void> {
+  await writeDiskCache<string>(cacheOpts(DEFAULT_TTL_MS), hostKey(host), cloudId);
 }

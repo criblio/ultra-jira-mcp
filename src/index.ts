@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -9,6 +8,7 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { startStdioServer } from "@scottlepper/mcp-toolkit/stdio";
 
 import { getConfig, type JiraConfig } from "./config.js";
 import { JiraClient, JiraApiError } from "./auth/jira-client.js";
@@ -26,7 +26,7 @@ import {
   JIRA_CODE_API_TOOL_NAME,
   type CodeApiToolContext,
 } from "./codeapi/tool.js";
-import { closeHttpPool } from "./core/http.js";
+import { closeHttpPool } from "@scottlepper/mcp-toolkit/transport";
 
 // --- Server -----------------------------------------------------------
 
@@ -181,36 +181,34 @@ async function main() {
     console.error(`Actions disabled: ${f.disabledActions.join(", ")}`);
   }
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(
+  const banner =
     `Jira MCP server running on stdio (mode=${modeState.mode}` +
-      (modeState.mode === "code-api" ? `, cli=${modeState.ctx.cliPath}` : "") +
-      (modeState.mode === "classic" ? `, tools=${modeState.tools.length}` : "") +
-      ")",
-  );
-}
+    (modeState.mode === "code-api" ? `, cli=${modeState.ctx.cliPath}` : "") +
+    (modeState.mode === "classic" ? `, tools=${modeState.tools.length}` : "") +
+    ")";
 
-async function shutdown(signal: NodeJS.Signals) {
-  console.error(`Received ${signal}, shutting down`);
-  // Order matters:
-  //   1) close the MCP transport so we stop accepting new tool calls
-  //   2) close the bridge so in-flight stub calls drain rather than
-  //      get cut mid-response
-  //   3) close the undici pool so any pending Jira HTTP request
-  //      finishes (or is allowed to error cleanly) before exit
-  // Each step is best-effort — a failure in one shouldn't block the
-  // others.
-  await server.close().catch(() => {});
-  if (modeState?.mode === "code-api") {
-    await modeState.bridge.close().catch(() => {});
-  }
-  await closeHttpPool().catch(() => {});
-  process.exit(0);
+  await startStdioServer({
+    server,
+    banner,
+    // Shutdown order matters:
+    //   1) close the MCP transport so we stop accepting new tool calls
+    //   2) close the bridge so in-flight stub calls drain rather than
+    //      get cut mid-response
+    //   3) close the undici pool so any pending Jira HTTP request
+    //      finishes (or is allowed to error cleanly) before exit
+    // Each step is best-effort — a failure in one shouldn't block the
+    // others. startStdioServer swallows handler exceptions and exits
+    // cleanly after this returns.
+    async onShutdown(signal) {
+      console.error(`Received ${signal}, shutting down`);
+      await server.close().catch(() => {});
+      if (modeState?.mode === "code-api") {
+        await modeState.bridge.close().catch(() => {});
+      }
+      await closeHttpPool().catch(() => {});
+    },
+  });
 }
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
 
 main().catch((error) => {
   console.error("Fatal error:", error);
