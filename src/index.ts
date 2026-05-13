@@ -31,7 +31,7 @@ import { closeHttpPool } from "@scottlepper/mcp-toolkit/transport";
 // --- Server -----------------------------------------------------------
 
 const server = new Server(
-  { name: "jira-mcp", version: "2.0.0" },
+  { name: "ultra-jira-mcp", version: "2.0.0" },
   { capabilities: { tools: {}, resources: {} } },
 );
 

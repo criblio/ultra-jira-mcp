@@ -1,6 +1,6 @@
-# Migrating from jira-mcp v1 to v2
+# Migrating from ultra-jira-mcp v1 to v2
 
-v2 is a clean break, not a drop-in. Tools have new names, the response shape changed, and one env var got renamed. Most v1 users will spend a few minutes updating their MCP server config and then never need to think about it again. v1 is still maintained on the [`1.x` branch](https://github.com/scottlepp/jira-mcp/tree/1.x) if you'd rather stay there.
+v2 is a clean break, not a drop-in. Tools have new names, the response shape changed, and one env var got renamed. Most v1 users will spend a few minutes updating their MCP server config and then never need to think about it again. v1 is still maintained on the [`1.x` branch](https://github.com/scottlepp/ultra-jira-mcp/tree/1.x) if you'd rather stay there.
 
 ## What changed at a glance
 
@@ -320,4 +320,4 @@ For Claude Code users: run `jira-cli install-skill` once to write `~/.claude/ski
 
 ## Reporting issues with the migration
 
-If you hit a v1 tool name that doesn't appear in the table above, or a v2 mapping that doesn't behave like its v1 ancestor, please file an issue at https://github.com/scottlepp/jira-mcp/issues with the v1 tool name and the args you were sending.
+If you hit a v1 tool name that doesn't appear in the table above, or a v2 mapping that doesn't behave like its v1 ancestor, please file an issue at https://github.com/scottlepp/ultra-jira-mcp/issues with the v1 tool name and the args you were sending.

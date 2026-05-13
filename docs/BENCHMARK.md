@@ -1,4 +1,4 @@
-# jira-mcp v2 token-budget benchmark
+# ultra-jira-mcp v2 token-budget benchmark
 
 How much smaller does v2 make an agent's context footprint compared to v1?
 This is what `npm run benchmark` measures: bytes of JSON delivered into

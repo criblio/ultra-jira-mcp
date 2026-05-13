@@ -1,8 +1,9 @@
-# jira-mcp — agent guide
+# ultra-jira-mcp — agent guide
 
-Token-efficient MCP server **and** CLI for Jira Cloud. Built on
-`@scottlepper/mcp-toolkit` — generic MCP plumbing lives in the toolkit;
-this repo owns Jira-specific code only.
+Token-efficient MCP server **and** CLI for Jira Cloud (published as
+`ultra-jira-mcp` on npm; binaries are still `jira-mcp` and `jira-cli`).
+Built on `@scottlepper/mcp-toolkit` — generic MCP plumbing lives in the
+toolkit; this repo owns Jira-specific code only.
 
 ## Layout
 
@@ -66,7 +67,7 @@ and `npx jira-cli <op>` works without any MCP server in the picture.
 
 ## What lives where (toolkit vs. this repo)
 
-This split was the entire point of [PR #210](https://github.com/scottlepp/jira-mcp/pull/210)
+This split was the entire point of [PR #210](https://github.com/scottlepp/ultra-jira-mcp/pull/210)
 (toolkit migration). Don't blur it:
 
 - **In `@scottlepper/mcp-toolkit`**: vendor-agnostic primitives —
@@ -103,7 +104,7 @@ schemas, or the trim layer, run `npm run benchmark` and update
 - **User-facing** (`src/cli/install-skill.ts` → `~/.claude/skills/jira/`):
   teaches any Claude Code session how to drive `jira-cli`. Installed
   via `npm run install-skill` from a local checkout or
-  `npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli install-skill`.
+  `npx -y -p github:scottlepp/ultra-jira-mcp#codeapi jira-cli install-skill`.
 - **Contributor** (`.claude/skills/jira-mcp-dev/`): auto-loaded when
   working inside this repo. Teaches the layered architecture, the
   toolkit boundary, and where to add new operations.

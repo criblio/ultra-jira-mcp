@@ -43,7 +43,7 @@ description: >-
 Query Jira from the shell via \`jira-cli\`. Run it with \`npx\`:
 
 \`\`\`bash
-npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli <op> [--flag=value ...]
+npx -y -p github:scottlepp/ultra-jira-mcp#codeapi jira-cli <op> [--flag=value ...]
 \`\`\`
 
 ## First call in a session

@@ -1,18 +1,18 @@
 ---
-name: jira-mcp-dev
+name: ultra-jira-mcp-dev
 description: >-
-  Contributor guidance for the jira-mcp repo itself — how to add a new
-  Jira operation, where the toolkit boundary sits, which layer owns
-  which concern, how to run tests and benchmarks. Use when modifying
-  files under src/ or tests/ in this repo, NOT when calling Jira from
-  another project (that's the `jira` skill).
+  Contributor guidance for the ultra-jira-mcp repo itself — how to add
+  a new Jira operation, where the toolkit boundary sits, which layer
+  owns which concern, how to run tests and benchmarks. Use when
+  modifying files under src/ or tests/ in this repo, NOT when calling
+  Jira from another project (that's the `jira` skill).
 ---
-# jira-mcp contributor skill
+# ultra-jira-mcp contributor skill
 
-You are working inside the `jira-mcp` repo — the source of the
-`jira-mcp` MCP server and `jira-cli` standalone CLI. This skill
-teaches the architecture and the toolkit boundary so you don't have
-to re-derive them on every task.
+You are working inside the `ultra-jira-mcp` repo (npm package name;
+the binaries it ships are still `jira-mcp` and `jira-cli`). This
+skill teaches the architecture and the toolkit boundary so you don't
+have to re-derive them on every task.
 
 For a longer prose version, see [CLAUDE.md](../../../CLAUDE.md).
 
@@ -102,7 +102,7 @@ The user-facing skill (`name: jira`, written to
 stay in sync:
 
 - `npm run install-skill` from a local checkout (this repo).
-- `npx -y -p github:scottlepper/jira-mcp#codeapi jira-cli install-skill`
+- `npx -y -p github:scottlepp/ultra-jira-mcp#codeapi jira-cli install-skill`
   from anywhere.
 
 Both call the same `installSkill()` in `src/cli/install-skill.ts`

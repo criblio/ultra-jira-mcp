@@ -545,7 +545,7 @@ function renderReport(
   results: ScenarioResult[],
 ): string {
   const lines: string[] = [];
-  lines.push("# jira-mcp token budget benchmark");
+  lines.push("# ultra-jira-mcp token budget benchmark");
   lines.push("");
   lines.push(
     "Bytes of MCP request/response that would land in the agent's context window.",

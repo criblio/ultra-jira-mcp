@@ -86,7 +86,7 @@ describe("installSkill", () => {
     expect(SKILL_CONTENT).toMatch(/^description:/m);
     // Body must mention the canonical npx invocation so the agent
     // learns the binary path from the skill alone.
-    expect(SKILL_CONTENT).toContain("npx -y -p github:scottlepp/jira-mcp");
+    expect(SKILL_CONTENT).toContain("npx -y -p github:scottlepp/ultra-jira-mcp");
     expect(SKILL_CONTENT).toContain("jira-cli --help");
     // Subtasks gotcha is the same recurring issue we hit in real
     // sessions; its presence in the skill is load-bearing.

@@ -5,13 +5,13 @@ A Token Efficient, Low Context, Model Context Protocol (MCP) server or CLI that 
 ## Installation
 
 ```bash
-npx jira-mcp
+npx ultra-jira-mcp
 ```
 
 Or globally:
 
 ```bash
-npm install -g jira-mcp
+npm install -g ultra-jira-mcp
 ```
 
 ## Configuration
@@ -37,7 +37,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "jira": {
       "command": "npx",
-      "args": ["-y", "jira-mcp"],
+      "args": ["-y", "ultra-jira-mcp"],
       "env": {
         "JIRA_HOST": "https://yourcompany.atlassian.net",
         "JIRA_EMAIL": "your-email@example.com",
@@ -125,7 +125,7 @@ The same `jira-cli` binary works without an MCP server. Set `JIRA_HOST` / `JIRA_
 export JIRA_HOST=https://yourcompany.atlassian.net
 export JIRA_EMAIL=you@example.com
 export JIRA_API_TOKEN=...
-npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli issue.get --issueIdOrKey=PROJ-1
+npx -y -p github:scottlepp/ultra-jira-mcp#codeapi jira-cli issue.get --issueIdOrKey=PROJ-1
 ```
 
 The CLI auto-selects between **bridge mode** (`JIRA_MCP_SOCKET` set, talks to a running server) and **direct mode** (no socket, builds a `JiraClient` in-process). Same trim + ref output either way; credentials never leave the CLI's `process.env`, so they don't enter the agent's context.
@@ -133,7 +133,7 @@ The CLI auto-selects between **bridge mode** (`JIRA_MCP_SOCKET` set, talks to a 
 For Claude Code users, install the skill once so the agent discovers the CLI on its own:
 
 ```bash
-npx -y -p github:scottlepp/jira-mcp#codeapi jira-cli install-skill
+npx -y -p github:scottlepp/ultra-jira-mcp#codeapi jira-cli install-skill
 ```
 
 This writes `~/.claude/skills/jira/SKILL.md`. The skill loads on demand whenever the user mentions Jira and teaches the agent the canonical invocation, common operations, and `--help` discovery. Re-run with `--force` to update; `--print` dumps the rendered SKILL.md to stdout without writing.
@@ -160,7 +160,7 @@ npm run benchmark       # measures tool-list + per-call bytes against live Jira
 npm run inspector       # @modelcontextprotocol/inspector against build/index.js
 ```
 
-The benchmark requires `.env.local` with the regular `JIRA_*` vars plus `JIRA_BENCH_TICKET_RICH` and `JIRA_BENCH_TICKET_SIMPLE` keys. To include v1 in the comparison, set up a sibling worktree once: `git worktree add ../jira-mcp-v1 v1.0.0 && (cd ../jira-mcp-v1 && npm install && npm run build)`. See [docs/BENCHMARK.md](docs/BENCHMARK.md) for the latest numbers.
+The benchmark requires `.env.local` with the regular `JIRA_*` vars plus `JIRA_BENCH_TICKET_RICH` and `JIRA_BENCH_TICKET_SIMPLE` keys. To include v1 in the comparison, set up a sibling worktree once: `git worktree add ../ultra-jira-mcp-v1 v1.0.0 && (cd ../ultra-jira-mcp-v1 && npm install && npm run build)`. See [docs/BENCHMARK.md](docs/BENCHMARK.md) for the latest numbers.
 
 ## License
 

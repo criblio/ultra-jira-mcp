@@ -17,4 +17,4 @@ guidance. Treat the two files as one source of truth — edits go in
 - **Run the CLI directly:** `node build/cli/index.js --help`.
 - **Install the user-facing skill:** `npm run install-skill`.
 - **Contributor skill:** auto-loaded from `.claude/skills/jira-mcp-dev/`
-  when working in this repo.
+  when working in this repo (skill `name:` is `ultra-jira-mcp-dev`).
