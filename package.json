@@ -34,7 +34,7 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@scottlepper/mcp-toolkit": "^0.4.0",
+    "@scottlepper/mcp-toolkit": "^0.5.0",
     "dotenv": "^17.4.2",
     "undici": "^6.25.0",
     "zod": "^4.4.3"
