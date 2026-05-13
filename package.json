@@ -20,7 +20,8 @@
     "test:integration": "vitest run tests/integration.test.ts",
     "prepare": "npm run build",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
-    "benchmark": "npm run build && tsx scripts/benchmark.ts"
+    "benchmark": "npm run build && tsx scripts/benchmark.ts",
+    "install-skill": "npm run build && node build/cli/index.js install-skill"
   },
   "keywords": [
     "mcp",
