@@ -1,8 +1,6 @@
-# Jira MCP Server
+# Ultra Jira MCP Server/CLI
 
-A Model Context Protocol (MCP) server that gives AI agents access to Jira Cloud via the REST API v3 and Agile API 1.0.
-
-**v2.0 is a clean break from v1.** v1's 85 tools collapse into 16 consolidated tools (one per Jira category, action-discriminated). Responses are sandboxed to disk so a 100KB Jira payload doesn't blow up the agent's context window. v1 is still maintained on the [`1.x`](https://github.com/scottlepp/jira-mcp/tree/1.x) branch. See [docs/MIGRATION.md](docs/MIGRATION.md) for the upgrade path.
+A Token Efficient, Low Context, Model Context Protocol (MCP) server or CLI that gives AI agents access to Jira Cloud via the REST API v3 and Agile API 1.0.
 
 ## Installation
 
