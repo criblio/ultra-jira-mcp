@@ -23,7 +23,7 @@
     "@ai-sdk/anthropic": "^3.0.75",
     "@ai-sdk/mistral": "^3.0.31",
     "@ai-sdk/perplexity": "^3.0.32",
-    "@openrouter/ai-sdk-provider": "^2.8.0",
+    "@openrouter/ai-sdk-provider": "^2.9.0",
     "@octokit/rest": "^22.0.1",
     "zod": "^4.4.3",
     "dotenv": "^17.4.2"
