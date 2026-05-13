@@ -18,7 +18,7 @@
     "@ai-sdk/google": "^3.0.67",
     "@ai-sdk/groq": "^3.0.38",
     "@ai-sdk/deepseek": "^2.0.33",
-    "@ai-sdk/openai": "^3.0.62",
+    "@ai-sdk/openai": "^3.0.63",
     "@ai-sdk/openai-compatible": "^2.0.46",
     "@ai-sdk/anthropic": "^3.0.75",
     "@ai-sdk/mistral": "^3.0.31",
