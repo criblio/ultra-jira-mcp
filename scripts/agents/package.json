@@ -25,6 +25,7 @@
     "@ai-sdk/perplexity": "^3.0.33",
     "@openrouter/ai-sdk-provider": "^2.9.0",
     "@octokit/rest": "^22.0.1",
+    "ultra-mcp-toolkit": "github:criblio/ultra-mcp-toolkit#fd075e2d66c7b98583a72fc507e1d2b82ae0fd25",
     "zod": "^4.4.3",
     "dotenv": "^17.4.2"
   },

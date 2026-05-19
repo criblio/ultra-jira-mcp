@@ -1,5 +1,25 @@
 name: Dependabot Auto-Merge
 
+# SECURITY MODEL
+# --------------
+# This workflow runs on `pull_request_target` (privileged context). It is
+# scoped strictly to:
+#   - PRs authored by `dependabot[bot]`
+#   - PRs from the same repository (not forks)
+# Both conditions are enforced in the job-level `if` below; do not relax.
+#
+# We DO check out the PR's code so we can run `npm ci`/`npm test` against it,
+# which is necessary to know whether the bump is safe. To mitigate the
+# residual risk that a dependency under update ships a malicious postinstall
+# script:
+#   1. We only auto-merge patch and minor bumps (`update-type` check below).
+#   2. Major bumps fail CI here and require a human reviewer. We do not run
+#      the LLM-driven `bug-fix-agent.ts` on a Dependabot PR — running an
+#      agent off PR code in a privileged context is an RCE pattern.
+#
+# Together this gives Dependabot enough autonomy to keep deps current while
+# leaving every code-modifying step under human review.
+
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -16,14 +36,15 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  models: read
 
 jobs:
   test-and-merge:
     runs-on: ubuntu-latest
     environment: jira-mcp
-    # For pull_request events, only run for dependabot PRs from the same repo. For workflow_dispatch, always run.
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.user.login == 'dependabot[bot]' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
 
     steps:
       - name: Get PR info
@@ -37,16 +58,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Use Dependabot's metadata action to extract update-type. This is the
+      # canonical pattern for restricting auto-merge by semver scope.
+      - name: Dependabot metadata
+        if: github.event_name == 'pull_request_target'
+        id: dependabot-metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse major version bumps
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          steps.dependabot-metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          echo "::error::Major version bump detected. Auto-merge refused; a human reviewer must validate."
+          gh pr comment "${{ steps.pr-info.outputs.pr_number }}" --body \
+            "Major version bump detected for \`${{ steps.dependabot-metadata.outputs.dependency-names }}\`. Auto-merge is disabled for major bumps — please review manually."
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Checkout PR
         uses: actions/checkout@v6
         with:
           ref: refs/pull/${{ steps.pr-info.outputs.pr_number }}/head
           token: ${{ secrets.PAT_TOKEN }}
-
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -57,110 +94,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (attempt 1)
-        id: build-attempt-1
-        continue-on-error: true
+      - name: Build
         run: npm run build
 
-      - name: Test (attempt 1)
-        id: test-attempt-1
-        if: steps.build-attempt-1.outcome == 'success'
-        continue-on-error: true
+      - name: Test
         run: npm test
-
-      - name: Check if major version bump
-        id: check-major-bump
-        if: steps.build-attempt-1.outcome == 'failure' || steps.test-attempt-1.outcome == 'failure'
-        run: |
-          TITLE="${{ github.event.pull_request.title }}"
-          if echo "$TITLE" | grep -qP 'Bump.*from \d+\.\d+\.\d+ to \d+\.\d+\.\d+'; then
-            FROM_VERSION=$(echo "$TITLE" | grep -oP 'from \K\d+\.\d+\.\d+')
-            TO_VERSION=$(echo "$TITLE" | grep -oP 'to \K\d+\.\d+\.\d+')
-            FROM_MAJOR=$(echo "$FROM_VERSION" | cut -d. -f1)
-            TO_MAJOR=$(echo "$TO_VERSION" | cut -d. -f1)
-
-            if [ "$FROM_MAJOR" != "$TO_MAJOR" ]; then
-              echo "is_major_bump=true" >> $GITHUB_OUTPUT
-              PACKAGE=$(echo "$TITLE" | grep -oP 'Bump \K[^ ]+')
-              echo "package=$PACKAGE" >> $GITHUB_OUTPUT
-              echo "from_version=$FROM_VERSION" >> $GITHUB_OUTPUT
-              echo "to_version=$TO_VERSION" >> $GITHUB_OUTPUT
-            else
-              echo "is_major_bump=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "is_major_bump=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Let AI fix migration issues
-        if: steps.check-major-bump.outputs.is_major_bump == 'true'
-        run: |
-          echo "Major version bump detected: ${{ steps.check-major-bump.outputs.package }} ${{ steps.check-major-bump.outputs.from_version }} → ${{ steps.check-major-bump.outputs.to_version }}"
-          echo "Asking bug-fix agent to handle migration..."
-
-          # Create a temporary issue for the migration
-          ISSUE_BODY="Dependency upgrade requires code changes:
-
-          Package: ${{ steps.check-major-bump.outputs.package }}
-          From: ${{ steps.check-major-bump.outputs.from_version }}
-          To: ${{ steps.check-major-bump.outputs.to_version }}
-
-          Build status: ${{ steps.build-attempt-1.outcome }}
-          Test status: ${{ steps.test-attempt-1.outcome }}
-
-          Please update the code to be compatible with the new version."
-
-          ISSUE_NUM=$(gh issue create \
-            --title "Migration needed: ${{ steps.check-major-bump.outputs.package }} v${{ steps.check-major-bump.outputs.to_version }}" \
-            --body "$ISSUE_BODY" \
-            --label "bug,dependency-migration" \
-            --assignee "@me" | grep -oP '\d+$')
-
-          echo "Created issue #$ISSUE_NUM"
-
-          # Run bug-fix agent with multi-provider support
-          cd scripts/agents
-          ISSUE_NUMBER=$ISSUE_NUM CREATE_PR=false npx tsx src/agents/bug-fix-agent.ts
-
-          # Close the issue
-          gh issue close $ISSUE_NUM --comment "Migration applied automatically"
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          # AI Provider API Keys - At least one required, router will use all available
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # GitHub Models - enabled by default, uses GITHUB_TOKEN for auth (no additional API key needed)
-          # Available models: openai/gpt-4o, openai/gpt-4.1, meta/llama-3.3-70b-instruct, mistral-ai/codestral-2501
-          USE_GITHUB_MODELS: ${{ vars.USE_GITHUB_MODELS || 'true' }}
-          GITHUB_MODELS_MODEL: ${{ vars.GITHUB_MODELS_MODEL || 'openai/gpt-4o' }}
-
-      - name: Build (attempt 2)
-        if: steps.check-major-bump.outputs.is_major_bump == 'true'
-        run: npm run build
-
-      - name: Run tests (attempt 2)
-        if: steps.check-major-bump.outputs.is_major_bump == 'true'
-        run: npm test
-
-      - name: Push fixes if any
-        if: steps.check-major-bump.outputs.is_major_bump == 'true'
-        run: |
-          if git diff --quiet; then
-            echo "No changes to push"
-          else
-            git add -A
-            git commit -m "Apply migration fixes for ${{ steps.check-major-bump.outputs.package }} v${{ steps.check-major-bump.outputs.to_version }}
-
-            Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-            git push
-          fi
 
       - name: Enable auto-merge
         if: success()

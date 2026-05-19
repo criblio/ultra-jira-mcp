@@ -1,29 +1,39 @@
 name: Bug Fix Agent
 
+# SECURITY MODEL
+# --------------
+# This workflow runs an LLM-driven agent that opens PRs against the repo.
+# Anyone can open an issue, and an LLM cannot be trusted to recognize a
+# prompt-injection attempt embedded in issue text. We treat issue bodies as
+# fully untrusted input.
+#
+# Controls:
+#   1. ONLY issues bearing the `auto-fix-approved` label are processed. That
+#      label should be restricted to maintainers in repo settings so a
+#      drive-by reporter cannot apply it themselves.
+#   2. The agent never runs on a `push` event (removed). It runs on a daily
+#      cron and on manual `workflow_dispatch`.
+#   3. `workflow_dispatch` checks the invoking actor's repo permission level
+#      and refuses non-collaborator triggers.
+#   4. The agent's file/git tools enforce a path denylist (workflows, secrets,
+#      lockfiles, the agent dir itself) — see
+#      scripts/agents/src/validation/safety-checker.ts.
+#   5. Created PRs are NOT auto-merged. A human reviewer is required.
+
 on:
   schedule:
-    # Run daily at 3 AM UTC
+    # Daily at 3 AM UTC.
     - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       issue_number:
-        description: 'Specific issue number to fix (leave empty to process all bug issues)'
+        description: 'Specific issue number (must already carry the auto-fix-approved label)'
         type: number
         required: false
       max_issues:
         description: 'Maximum number of issues to process'
         type: number
         default: 3
-      create_pr:
-        description: 'Create PRs for fixes'
-        type: boolean
-        default: true
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '.github/workflows/**'
-      - '**.md'
 
 permissions:
   contents: write
@@ -37,6 +47,24 @@ jobs:
     environment: jira-mcp
 
     steps:
+      # workflow_dispatch trust gate: only repo collaborators with write or
+      # higher may invoke this manually. Scheduled runs come from the repo
+      # owner via cron and are implicitly trusted.
+      - name: Verify dispatcher is a collaborator
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            const level = perm.permission;
+            if (!['admin', 'maintain', 'write'].includes(level)) {
+              core.setFailed(`Actor ${context.actor} has permission '${level}', not authorized to dispatch this workflow.`);
+            }
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
@@ -67,8 +95,12 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ inputs.issue_number || '' }}
           MAX_ISSUES: ${{ inputs.max_issues || '3' }}
-          CREATE_PR: ${{ inputs.create_pr || 'true' }}
-          # AI Provider API Keys - At least one required, router will use all available
+          # Required label — agent refuses to process issues that don't carry it.
+          REQUIRED_LABEL: auto-fix-approved
+          # Always create PRs (never push directly), and never auto-merge.
+          CREATE_PR: 'true'
+          AUTO_MERGE: 'false'
+          # AI Provider API Keys — router uses the first available.
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -77,19 +109,20 @@ jobs:
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # GitHub Models - enabled by default, uses GITHUB_TOKEN for auth (no additional API key needed)
-          # Available models: openai/gpt-4o, openai/gpt-4.1, meta/llama-3.3-70b-instruct, mistral-ai/codestral-2501
           USE_GITHUB_MODELS: ${{ vars.USE_GITHUB_MODELS || 'true' }}
           GITHUB_MODELS_MODEL: ${{ vars.GITHUB_MODELS_MODEL || 'openai/gpt-4o' }}
 
       - name: Post summary
         if: always()
         run: |
-          echo "## Bug Fix Agent Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The Bug Fix Agent has completed processing." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- Issue Number: ${{ inputs.issue_number || 'All bug-labeled issues' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Max Issues: ${{ inputs.max_issues || '3' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Create PRs: ${{ inputs.create_pr || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Bug Fix Agent Summary"
+            echo ""
+            echo "The Bug Fix Agent has completed processing."
+            echo ""
+            echo "### Configuration"
+            echo "- Issue Number: ${{ inputs.issue_number || 'All issues with auto-fix-approved label' }}"
+            echo "- Max Issues: ${{ inputs.max_issues || '3' }}"
+            echo "- Required label: auto-fix-approved"
+            echo "- Auto-merge: disabled (human review required)"
+          } >> $GITHUB_STEP_SUMMARY
