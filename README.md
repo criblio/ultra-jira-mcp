@@ -1,6 +1,38 @@
 # Ultra Jira MCP Server/CLI
 
-A Token Efficient, Low Context, Model Context Protocol (MCP) server or CLI that gives AI agents access to Jira Cloud via the REST API v3 and Agile API 1.0.
+A token-efficient **Jira MCP server** and CLI for Claude, ChatGPT, Cursor, Cline, and any other Model Context Protocol (MCP) client. Gives AI agents full access to **Jira Cloud** via the REST API v3 and Agile API 1.0 — without burning your context window on Jira's verbose JSON.
+
+Built for the way real teams use AI agents with Jira: triaging tickets, planning sprints, summarizing comment threads, drafting status updates, running JQL searches, moving issues through workflows — not just for engineers writing code. If your agent talks to Jira, this server keeps it fast and cheap.
+
+**Keywords:** Jira MCP server, Jira Cloud MCP, Claude Jira integration, ChatGPT Jira, Cursor Jira, Cline Jira, Atlassian MCP, AI agent for Jira, JQL agent, sprint management AI, ticket triage AI.
+
+## Why this over other Jira MCP servers
+
+Most Jira MCP servers wrap the REST API one endpoint per tool and pass raw responses straight to the agent. That works on toy tickets and falls over the moment you point it at a real backlog. Here's what `ultra-jira-mcp` does differently:
+
+- **~17× smaller per-call responses.** A real "investigate this ticket with its comments" call drops from **270 KB (~67k tokens)** of raw Jira JSON to **15 KB (~3,900 tokens)** — same description, comments, subtasks, and links, just without Jira's `self` URLs, icon URLs, nested schema metadata, and ADF rich-text ASTs. See [docs/BENCHMARK.md](docs/BENCHMARK.md) for the full table.
+- **Up to 99× smaller tool-list cost** (the bytes paid into your context window on *every* conversation, before the agent has done anything). 16 consolidated tools instead of 80+ thin ones; optional `code-api` mode collapses that to a single tool that hands the agent a shell binary.
+- **Full responses are never lost** — they're written to a session-scoped temp dir and referenced by path. The agent reads the trimmed summary by default and `cat`s the full payload only when it actually needs the detail.
+- **ADF flattening built in.** Atlassian Document Format trees become plain text on the way out, so a 500-byte comment doesn't arrive as a 4 KB nested AST.
+- **Works as a standalone CLI too.** The same `jira-cli` binary runs without any MCP server in the picture — drop it in a script, a CI job, or a non-MCP agent framework.
+- **Tool surface you can prune.** `JIRA_ENABLED_CATEGORIES` and `JIRA_DISABLED_ACTIONS` let you whitelist only the operations your agent should see (and *block* destructive ones like `issue.delete` at the dispatch layer, not just hide them from the schema).
+- **Covers REST v3 and Agile API 1.0.** Issues, comments, worklogs, attachments, users, projects, **boards, sprints, epics**, filters, links, watchers/votes, fields, groups. Not just CRUD on issues.
+- **Ships a Claude Code skill.** One command (`jira-cli install-skill`) drops a SKILL.md under `~/.claude/skills/jira/` so any future Claude Code session discovers the CLI on demand whenever the user mentions Jira.
+
+If you're building anything beyond a demo — an agent that lives in a Slack channel triaging incoming tickets, a sprint-planning assistant that reads three boards, a release-notes drafter that scans a JQL filter — the per-call savings dominate every conversation longer than a handful of calls.
+
+## Use cases
+
+This isn't only for coding agents. Anywhere an LLM talks to Jira:
+
+- **Ticket triage and routing** — agent reads new issues, classifies, assigns, sets priority.
+- **Sprint planning and retros** — pull the backlog, summarize blockers, draft sprint goals.
+- **Status reporting** — JQL → trimmed list → human-readable update for Slack, email, or a Confluence page.
+- **Comment thread summarization** — long discussion threads collapse to the decisions and open questions.
+- **Workflow automation** — agent moves issues through transitions, assigns reviewers, links related work.
+- **Incident and bug investigation** — agent pulls a rich ticket with all comments, attachments, and linked issues in one trimmed response.
+- **Cross-tool workflows** — pair with Confluence, GitHub, Slack, or Bitbucket MCP servers to drive end-to-end flows.
+- **Coding agents** — yes, this too. Claude Code, Cursor, Cline, and friends can pick up tickets, implement them, and update status without flooding context.
 
 ## Installation
 
