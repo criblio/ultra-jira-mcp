@@ -1,27 +1,51 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { execSync } from 'child_process';
-import { readFile, writeFile } from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { VulnerabilityReport } from '../agents/types.js';
 
+const execFileAsync = promisify(execFile);
+
 /**
- * NPM tools for package management and security scanning
+ * NPM tools for package management and security scanning.
+ *
+ * Every `npm` invocation uses `execFile("npm", [...])` — argv array, no
+ * shell. Package names, versions, and flags are NEVER concatenated into a
+ * command string; an attacker-controlled `packageName` (or one inside an
+ * untrusted issue body the agent has been pointed at) cannot escape via
+ * `$()`, backticks, or `;`.
+ *
+ * Package names are also format-validated against the npm name grammar
+ * before being shelled out, to keep the model from accidentally passing
+ * a flag (e.g. `--registry=evil.example.com`) as a "package name".
  */
 export function createNpmTools(workingDir: string) {
-  const exec = (cmd: string, options?: { timeout?: number }): string => {
-    return execSync(cmd, {
+  async function npm(
+    args: string[],
+    timeoutMs = 120_000,
+  ): Promise<{ stdout: string; stderr: string }> {
+    return execFileAsync('npm', args, {
       cwd: workingDir,
-      encoding: 'utf-8',
-      timeout: options?.timeout || 120000, // 2 minute default
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
     });
-  };
+  }
+
+  /** npm package name grammar (scoped or unscoped). Rejects flag-shaped strings. */
+  function isValidPackageName(name: string): boolean {
+    if (!name || name.startsWith('-')) return false;
+    return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(name);
+  }
+
+  /** Loose semver-ish check that rejects shell metacharacters and flags. */
+  function isValidVersionSpec(v: string): boolean {
+    if (!v || v.startsWith('-')) return false;
+    return /^[A-Za-z0-9.+\-^~*<>=|x ]+$/.test(v);
+  }
 
   return {
-    /**
-     * Run npm audit to check for vulnerabilities
-     */
     npmAudit: tool({
       description: 'Run npm audit to check for security vulnerabilities in dependencies',
       inputSchema: z.object({
@@ -31,24 +55,27 @@ export function createNpmTools(workingDir: string) {
           .describe('Minimum severity level to report'),
       }),
       execute: async ({ auditLevel }: { auditLevel: 'low' | 'moderate' | 'high' | 'critical' }) => {
+        let auditJson: string;
         try {
-          // npm audit exits with non-zero when vulnerabilities found
-          let auditJson: string;
-          try {
-            auditJson = exec(`npm audit --json --audit-level=${auditLevel}`);
-          } catch (error: unknown) {
-            // npm audit returns non-zero exit code when vulnerabilities exist
-            if (error && typeof error === 'object' && 'stdout' in error) {
-              auditJson = (error as { stdout: string }).stdout;
-            } else {
-              throw error;
-            }
+          const { stdout } = await npm(['audit', '--json', `--audit-level=${auditLevel}`]);
+          auditJson = stdout;
+        } catch (error: unknown) {
+          // npm audit returns non-zero when vulnerabilities exist.
+          if (error && typeof error === 'object' && 'stdout' in error) {
+            auditJson = (error as { stdout: string }).stdout;
+          } else {
+            return {
+              success: false,
+              error: `Failed to run npm audit: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              vulnerabilities: [],
+            };
           }
+        }
 
+        try {
           const audit = JSON.parse(auditJson);
           const vulnerabilities: VulnerabilityReport[] = [];
 
-          // Parse vulnerabilities from npm audit output
           if (audit.vulnerabilities) {
             for (const [pkgName, vuln] of Object.entries(audit.vulnerabilities)) {
               const v = vuln as {
@@ -90,42 +117,26 @@ export function createNpmTools(workingDir: string) {
         } catch (error) {
           return {
             success: false,
-            error: `Failed to run npm audit: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            error: `Failed to parse npm audit output: ${error instanceof Error ? error.message : 'Unknown error'}`,
             vulnerabilities: [],
           };
         }
       },
     }),
 
-    /**
-     * Run npm audit fix
-     */
     npmAuditFix: tool({
       description: 'Run npm audit fix to automatically fix vulnerabilities',
       inputSchema: z.object({
-        force: z
-          .boolean()
-          .default(false)
-          .describe('Force fix (may include breaking changes)'),
-        dryRun: z
-          .boolean()
-          .default(false)
-          .describe('Show what would be changed without making changes'),
+        force: z.boolean().default(false).describe('Force fix (may include breaking changes)'),
+        dryRun: z.boolean().default(false).describe('Show what would be changed without making changes'),
       }),
       execute: async ({ force, dryRun }: { force: boolean; dryRun: boolean }) => {
+        const args = ['audit', 'fix'];
+        if (force) args.push('--force');
+        if (dryRun) args.push('--dry-run');
         try {
-          let cmd = 'npm audit fix';
-          if (force) cmd += ' --force';
-          if (dryRun) cmd += ' --dry-run';
-
-          const output = exec(cmd, { timeout: 300000 }); // 5 minute timeout
-
-          return {
-            success: true,
-            output,
-            dryRun,
-            force,
-          };
+          const { stdout } = await npm(args, 300_000);
+          return { success: true, output: stdout, dryRun, force };
         } catch (error) {
           return {
             success: false,
@@ -135,29 +146,25 @@ export function createNpmTools(workingDir: string) {
       },
     }),
 
-    /**
-     * Update a specific package
-     */
     npmUpdate: tool({
-      description: 'Update a specific npm package',
+      description: 'Update a specific npm package (name validated against npm package-name grammar)',
       inputSchema: z.object({
         packageName: z.string().describe('Name of the package to update'),
-        version: z.string().optional().describe('Specific version to update to'),
+        version: z.string().optional().describe('Specific version or range to update to'),
       }),
       execute: async ({ packageName, version }: { packageName: string; version?: string }) => {
+        if (!isValidPackageName(packageName)) {
+          return { success: false, error: `Invalid package name: ${packageName}` };
+        }
+        if (version !== undefined && !isValidVersionSpec(version)) {
+          return { success: false, error: `Invalid version spec: ${version}` };
+        }
         try {
-          const cmd = version
-            ? `npm install ${packageName}@${version}`
-            : `npm update ${packageName}`;
-
-          const output = exec(cmd, { timeout: 120000 });
-
-          return {
-            success: true,
-            package: packageName,
-            version,
-            output,
-          };
+          const args = version
+            ? ['install', `${packageName}@${version}`]
+            : ['update', packageName];
+          const { stdout } = await npm(args, 120_000);
+          return { success: true, package: packageName, version, output: stdout };
         } catch (error) {
           return {
             success: false,
@@ -167,42 +174,29 @@ export function createNpmTools(workingDir: string) {
       },
     }),
 
-    /**
-     * Get outdated packages
-     */
     npmOutdated: tool({
       description: 'List outdated packages in the project',
       inputSchema: z.object({}),
       execute: async () => {
+        let outdatedJson: string;
         try {
-          let outdatedJson: string;
-          try {
-            outdatedJson = exec('npm outdated --json');
-          } catch (error: unknown) {
-            // npm outdated returns non-zero exit when packages are outdated
-            if (error && typeof error === 'object' && 'stdout' in error) {
-              outdatedJson = (error as { stdout: string }).stdout || '{}';
-            } else {
-              outdatedJson = '{}';
-            }
+          const { stdout } = await npm(['outdated', '--json']);
+          outdatedJson = stdout || '{}';
+        } catch (error: unknown) {
+          if (error && typeof error === 'object' && 'stdout' in error) {
+            outdatedJson = (error as { stdout: string }).stdout || '{}';
+          } else {
+            outdatedJson = '{}';
           }
+        }
 
-          const outdated = JSON.parse(outdatedJson || '{}');
+        try {
+          const outdated = JSON.parse(outdatedJson);
           const packages = Object.entries(outdated).map(([name, info]) => {
             const i = info as { current: string; wanted: string; latest: string };
-            return {
-              name,
-              current: i.current,
-              wanted: i.wanted,
-              latest: i.latest,
-            };
+            return { name, current: i.current, wanted: i.wanted, latest: i.latest };
           });
-
-          return {
-            success: true,
-            packages,
-            count: packages.length,
-          };
+          return { success: true, packages, count: packages.length };
         } catch (error) {
           return {
             success: false,
@@ -213,19 +207,13 @@ export function createNpmTools(workingDir: string) {
       },
     }),
 
-    /**
-     * Read package.json
-     */
     readPackageJson: tool({
-      description: 'Read the package.json file',
-      inputSchema: z.object({
-        path: z.string().default('package.json').describe('Path to package.json'),
-      }),
-      execute: async ({ path }: { path: string }) => {
+      description: 'Read the package.json file (fixed path; no traversal accepted)',
+      inputSchema: z.object({}),
+      execute: async () => {
         try {
-          const content = await readFile(join(workingDir, path), 'utf-8');
+          const content = await readFile(join(workingDir, 'package.json'), 'utf-8');
           const pkg = JSON.parse(content);
-
           return {
             success: true,
             name: pkg.name,
@@ -243,24 +231,16 @@ export function createNpmTools(workingDir: string) {
       },
     }),
 
-    /**
-     * Install dependencies
-     */
     npmInstall: tool({
-      description: 'Run npm install to install dependencies',
+      description: 'Run npm install / npm ci to install dependencies',
       inputSchema: z.object({
         clean: z.boolean().default(false).describe('Run npm ci instead of npm install'),
       }),
       execute: async ({ clean }: { clean: boolean }) => {
         try {
-          const cmd = clean ? 'npm ci' : 'npm install';
-          const output = exec(cmd, { timeout: 300000 }); // 5 minute timeout
-
-          return {
-            success: true,
-            output,
-            command: cmd,
-          };
+          const args = clean ? ['ci'] : ['install'];
+          const { stdout } = await npm(args, 300_000);
+          return { success: true, output: stdout, command: clean ? 'npm ci' : 'npm install' };
         } catch (error) {
           return {
             success: false,

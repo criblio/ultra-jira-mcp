@@ -120,13 +120,36 @@ export abstract class BaseAgent<TInput, TOutput> {
             : undefined;
           toolCalls.push({ name, args, result });
 
-          // Track proposed changes if the tool creates them
+          // Track proposed changes if the tool creates them. The toolkit's
+          // file tools emit `{ filePath, type: 'create' | 'modify', content }`;
+          // local code consumes the wider `ProposedChange` shape with
+          // `changeType`/`newContent`. Bridge here so downstream validators
+          // (change-validator, safety-checker) don't have to know the source.
           if (
             result &&
             typeof result === 'object' &&
-            'proposedChange' in result
+            'proposedChange' in result &&
+            result.proposedChange &&
+            typeof result.proposedChange === 'object'
           ) {
-            proposedChanges.push(result.proposedChange as ProposedChange);
+            const raw = result.proposedChange as {
+              filePath: string;
+              type?: 'create' | 'modify';
+              changeType?: ProposedChange['changeType'];
+              content?: string;
+              newContent?: string;
+              originalContent?: string;
+              description?: string;
+              riskLevel?: ProposedChange['riskLevel'];
+            };
+            proposedChanges.push({
+              filePath: raw.filePath,
+              changeType: raw.changeType ?? raw.type ?? 'modify',
+              originalContent: raw.originalContent,
+              newContent: raw.newContent ?? raw.content,
+              description: raw.description ?? `Change to ${raw.filePath}`,
+              riskLevel: raw.riskLevel ?? 'medium',
+            });
           }
 
           return result;

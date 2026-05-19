@@ -128,6 +128,10 @@ export interface VulnerabilityReport {
 export interface BugFixAgentInput {
   /** Issue number to fix */
   issueNumber?: number;
+  /** Issue title — pre-fetched by the workflow so the model never causes a fresh API roundtrip on untrusted content */
+  issueTitle?: string;
+  /** Issue body — pre-fetched, truncated, and wrapped in <UNTRUSTED_ISSUE> tags before reaching the model */
+  issueBody?: string;
   /** Maximum issues to process */
   maxIssues?: number;
   /** Labels to filter by */

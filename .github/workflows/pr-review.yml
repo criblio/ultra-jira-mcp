@@ -1,5 +1,22 @@
 name: PR Review Agent
 
+# SECURITY MODEL
+# --------------
+# This workflow runs on `pull_request_target`, which gives it write access to
+# the repo and access to secrets. PRs from forks are untrusted — anyone can
+# open one. To prevent a malicious PR from rewriting agent code and stealing
+# our token bag, this workflow MUST NEVER execute code that came from the PR.
+#
+# Specifically:
+#   - We check out `main` (not the PR ref).
+#   - We pull the diff via `gh api` as data, not via `git checkout` into the
+#     workspace. The diff lands in a file the agent reads as untrusted text.
+#   - `npm ci` runs against `main`'s lockfile only.
+#
+# Do not add a `git checkout refs/pull/.../head` step here, and do not let
+# the agent's tools open files outside of `scripts/agents/`. See
+# scripts/agents/src/validation/safety-checker.ts.
+
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -35,16 +52,17 @@ jobs:
   review-pr:
     runs-on: ubuntu-latest
     environment: jira-mcp
-    # Review all PRs including forks! Uses API-only mode (no PR code execution)
-    # This is safe because we only checkout main branch and use GitHub API to read PR files
+    # Skip our own bots so we don't review-loop on auto-merge / dependabot.
     if: github.actor != 'github-actions[bot]' && github.actor != 'dependabot[bot]'
 
     steps:
-      - name: Checkout PR code (safe - we only review, never execute)
+      # Always check out main. Never the PR. The PR's contents are pulled in
+      # later as a diff file — data, not executable code.
+      - name: Checkout main (never the PR)
         uses: actions/checkout@v6
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/head
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -52,20 +70,11 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Get package files from main for safe dependency installation
-        run: |
-          git fetch origin main
-          git checkout origin/main -- package.json package-lock.json scripts/agents/package.json scripts/agents/package-lock.json
-
-      - name: Install dependencies (from main branch)
+      - name: Install dependencies (from main)
         run: npm ci
 
-      - name: Install agent dependencies (from main branch)
+      - name: Install agent dependencies (from main)
         run: cd scripts/agents && npm ci
-
-      - name: Restore PR code
-        run: |
-          git checkout HEAD -- .
 
       - name: Determine PR Number
         id: pr-number
@@ -76,10 +85,10 @@ jobs:
             echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Check PR State
+      - name: Check PR state
         id: pr-state
         run: |
-          PR_STATE=$(gh pr view ${{ steps.pr-number.outputs.pr_number }} --json state --jq .state)
+          PR_STATE=$(gh pr view "${{ steps.pr-number.outputs.pr_number }}" --json state --jq .state)
           echo "state=$PR_STATE" >> $GITHUB_OUTPUT
           if [ "$PR_STATE" != "OPEN" ]; then
             echo "PR is $PR_STATE, skipping review"
@@ -87,25 +96,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate PR diff
+      # Fetch the diff via the GitHub API as data. We never `git checkout` the
+      # PR ref into the workspace.
+      - name: Fetch PR diff as data
         if: steps.pr-state.outputs.state == 'OPEN'
-        id: pr-diff
         run: |
-          # Generate diff between base and current HEAD
-          git diff origin/${{ github.event.pull_request.base.ref || 'main' }}...HEAD > pr-diff.patch
+          gh api \
+            -H "Accept: application/vnd.github.v3.diff" \
+            "/repos/${{ github.repository }}/pulls/${{ steps.pr-number.outputs.pr_number }}" \
+            > pr-diff.patch
+          echo "Diff size: $(wc -c < pr-diff.patch) bytes"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run PR Review Agent
+      - name: Run PR Review Agent (from main)
         if: steps.pr-state.outputs.state == 'OPEN'
         id: pr-review-agent
         run: npx tsx scripts/agents/src/agents/pr-review-agent.ts
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT_TOKEN allows APPROVE/REQUEST_CHANGES (GITHUB_TOKEN can't approve)
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr-number.outputs.pr_number }}
           PR_DIFF_FILE: pr-diff.patch
           FOCUS_AREAS: ${{ inputs.focus_areas || 'security,logic,tests' }}
           SUGGEST_TESTS: ${{ inputs.suggest_tests || 'true' }}
-          # AI Provider API Keys - At least one required, router will use all available
+          # AI Provider API Keys — router uses the first available.
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -114,8 +130,6 @@ jobs:
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # GitHub Models - enabled by default, uses GITHUB_TOKEN for auth (no additional API key needed)
-          # Available models: openai/gpt-4o, openai/gpt-4.1, meta/llama-3.3-70b-instruct, mistral-ai/codestral-2501
           USE_GITHUB_MODELS: ${{ vars.USE_GITHUB_MODELS || 'true' }}
           GITHUB_MODELS_MODEL: ${{ vars.GITHUB_MODELS_MODEL || 'openai/gpt-4o' }}
 
