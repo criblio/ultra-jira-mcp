@@ -24,6 +24,7 @@ import {
 } from "@scottlepper/mcp-toolkit/manifest";
 
 import type { JiraClient } from "../auth/jira-client.js";
+import { coerceBody } from "./body-coerce.js";
 import { trimRegistry, type TrimKey } from "./trim-registry.js";
 
 // --- Re-exports -------------------------------------------------------
@@ -109,7 +110,14 @@ export function makeJiraExecutor(
 export const executeJiraOp: ExecuteFn = async (ctx) => {
   const op = ctx.op as Operation;
   const client = ctx.client as JiraClient;
-  const { path, queryParams, body } = ctx;
+  const { path, queryParams } = ctx;
+  // Coerce body before dispatch: JSON-parse string values that arrived
+  // from the CLI's `--fields=@<file>` (which resolves to file contents
+  // as a string, not a parsed object), and convert markdown strings in
+  // known rich-text fields (description, body, environment) to ADF
+  // documents — Jira v3 rejects plain strings for those fields with
+  // "Operation value must be an Atlassian Document".
+  const body = coerceBody(ctx.body);
 
   if (op.isAgile) {
     switch (op.verb) {
