@@ -208,10 +208,15 @@ Source of truth: every v1 tool name in v1's README, mapped to its v2 equivalent.
 
 | v1 | v2 action |
 |---|---|
+| *(new)* | `add` |
 | `jira_get_attachment` | `get` |
 | `jira_delete_attachment` | `delete` |
 | `jira_get_attachment_meta` | `meta` |
 | `jira_get_attachment_content` | *(removed — see note below)* |
+
+`add` uploads local file(s) to an issue: pass `issueIdOrKey` and `filePath` (a path string or array of paths). The server reads the bytes off disk and POSTs them as `multipart/form-data` — the agent never holds file contents. It returns the trimmed attachment summary (`id`, `filename`, `mimeType`, `size`) with the full Jira response sandboxed behind a `ref`. Because multipart can't ride the JSON manifest dispatcher, `add` is handled by a side-channel (`src/tools/v2/attachment-upload.ts`); `JIRA_DISABLED_ACTIONS=attachment.add` still gates it.
+
+**Inline images in descriptions/comments.** On `jira_issue` `update` and `jira_comment` `add`/`update`, a markdown image pointing at a local file (`![alt](/path/to/img.png)`) is uploaded to the issue and embedded inline as an ADF `file` media node. The media node needs the Media Services UUID, not the REST attachment id — Jira doesn't expose the UUID directly, so we follow the attachment's `content` URL one hop and parse the UUID out of the redirect `Location` (`…/file/<uuid>/binary`). External-URL images (`![alt](https://…)`) on their own line render as external media; an image inline with text degrades to a labeled link (existing behavior). On `jira_issue` `create` there's no issue id to attach to yet, so a local-file image falls back to a labeled link — attach via `update` after the issue exists.
 
 `jira_get_attachment_content` (binary download) is no longer exposed as an MCP tool. The downloader still exists internally and runs eagerly when an issue is fetched: attachments land at `${TMPDIR}/jira-mcp/${session}/issues/${key}/attachments/${filename}`. Agents read them via Claude Code's `Read` tool when needed.
 
