@@ -22,7 +22,9 @@
     "prepare": "npm run build",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
     "benchmark": "npm run build && tsx scripts/benchmark.ts",
-    "install-skill": "npm run build && node build/cli/index.js install-skill"
+    "install-skill": "npm run build && node build/cli/index.js install-skill",
+    "relock": "bash scripts/relock.sh",
+    "relock:check": "bash scripts/relock.sh --check"
   },
   "keywords": [
     "mcp",
@@ -49,6 +51,6 @@
     "vitest": "^4.1.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

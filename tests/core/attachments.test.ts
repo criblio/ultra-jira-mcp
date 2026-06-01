@@ -8,11 +8,18 @@ import {
   assertValidIssueKey,
   downloadAttachment,
   guardSingleConsumption,
+  guessMimeType,
+  resolveMediaId,
   sanitizeFilename,
+  uploadAttachment,
   type AttachmentHttpResponse,
   type AttachmentInput,
   type AttachmentTransport,
+  type MediaIdTransport,
+  type UploadResponse,
+  type UploadTransport,
 } from "../../src/core/attachments.js";
+import * as os from "node:os";
 import {
   __resetSessionCacheDirForTests,
   rootCacheDir,
@@ -473,5 +480,174 @@ describe("guardSingleConsumption", () => {
     await ctx.res.bodyText();
     await expect(ctx.res.bodyText()).rejects.toThrow(/already consumed via bodyText/);
     expect(ctx.textCalls).toBe(1);
+  });
+});
+
+// --- guessMimeType -----------------------------------------------------
+
+describe("guessMimeType", () => {
+  it.each([
+    ["a.png", "image/png"],
+    ["a.JPG", "image/jpeg"],
+    ["a.jpeg", "image/jpeg"],
+    ["a.gif", "image/gif"],
+    ["a.pdf", "application/pdf"],
+    ["a.txt", "text/plain"],
+  ])("maps %s → %s", (name, expected) => {
+    expect(guessMimeType(name)).toBe(expected);
+  });
+
+  it("falls back to octet-stream for unknown extensions", () => {
+    expect(guessMimeType("a.unknownext")).toBe("application/octet-stream");
+    expect(guessMimeType("noext")).toBe("application/octet-stream");
+  });
+});
+
+// --- uploadAttachment --------------------------------------------------
+
+describe("uploadAttachment", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jira-upload-test-"));
+  });
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function writeFile(name: string, contents: string): Promise<string> {
+    const p = path.join(tmpDir, name);
+    await fs.writeFile(p, contents);
+    return p;
+  }
+
+  function okUpload(json: unknown): UploadResponse {
+    return {
+      statusCode: 200,
+      bodyText: () => Promise.resolve(JSON.stringify(json)),
+    };
+  }
+
+  it("posts a multipart body with the file bytes and required headers", async () => {
+    const filePath = await writeFile("shot.png", "PNGDATA");
+    const transport = vi.fn<UploadTransport>().mockResolvedValue(
+      okUpload([{ id: "10001", filename: "shot.png", mimeType: "image/png", size: 7 }]),
+    );
+
+    const result = await uploadAttachment(
+      { filePath },
+      {
+        url: "https://jira.example/rest/api/3/issue/PROJ-1/attachments",
+        authorizationHeader: "Basic abc",
+        transport,
+      },
+    );
+
+    expect(result).toEqual([
+      { id: "10001", filename: "shot.png", mimeType: "image/png", size: 7 },
+    ]);
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, init] = transport.mock.calls[0];
+    expect(url).toBe("https://jira.example/rest/api/3/issue/PROJ-1/attachments");
+    expect(init.method).toBe("POST");
+    expect(init.headers["X-Atlassian-Token"]).toBe("no-check");
+    expect(init.headers.Authorization).toBe("Basic abc");
+    expect(init.headers["Content-Type"]).toMatch(/^multipart\/form-data; boundary=/);
+
+    // The multipart body carries the file part with name="file" and the
+    // raw bytes — and the bytes never appear in the returned summary.
+    const bodyStr = init.body.toString("utf8");
+    expect(bodyStr).toContain('Content-Disposition: form-data; name="file"; filename="shot.png"');
+    expect(bodyStr).toContain("Content-Type: image/png");
+    expect(bodyStr).toContain("PNGDATA");
+  });
+
+  it("defaults the filename to the basename and lets it be overridden", async () => {
+    const filePath = await writeFile("original.png", "X");
+    const transport = vi.fn<UploadTransport>().mockResolvedValue(okUpload([]));
+
+    await uploadAttachment(
+      { filePath, filename: "renamed.png" },
+      { url: "u", authorizationHeader: "", transport },
+    );
+    const body = transport.mock.calls[0][1].body.toString("utf8");
+    expect(body).toContain('filename="renamed.png"');
+    expect(body).not.toContain("original.png");
+  });
+
+  it("throws a HTTP-shaped error on non-2xx", async () => {
+    const filePath = await writeFile("x.txt", "hi");
+    const transport = vi.fn<UploadTransport>().mockResolvedValue({
+      statusCode: 403,
+      bodyText: () => Promise.resolve("XSRF check failed"),
+    });
+    await expect(
+      uploadAttachment({ filePath }, { url: "u", authorizationHeader: "", transport }),
+    ).rejects.toThrow(/Failed to upload attachment x\.txt: HTTP 403 XSRF check failed/);
+  });
+
+  it("throws when the response is not JSON", async () => {
+    const filePath = await writeFile("x.txt", "hi");
+    const transport = vi.fn<UploadTransport>().mockResolvedValue({
+      statusCode: 200,
+      bodyText: () => Promise.resolve("<html>not json</html>"),
+    });
+    await expect(
+      uploadAttachment({ filePath }, { url: "u", authorizationHeader: "", transport }),
+    ).rejects.toThrow(/non-JSON response/);
+  });
+
+  it("propagates a read error when the file is missing", async () => {
+    const transport = vi.fn<UploadTransport>();
+    await expect(
+      uploadAttachment(
+        { filePath: path.join(tmpDir, "does-not-exist.png") },
+        { url: "u", authorizationHeader: "", transport },
+      ),
+    ).rejects.toThrow();
+    expect(transport).not.toHaveBeenCalled();
+  });
+});
+
+// --- resolveMediaId ----------------------------------------------------
+
+describe("resolveMediaId", () => {
+  it("parses the media UUID from the content redirect Location", async () => {
+    const uuid = "732375bc-8db1-47d3-8b2a-babf14273bce";
+    const transport: MediaIdTransport = vi.fn<MediaIdTransport>().mockResolvedValue({
+      statusCode: 303,
+      headers: {
+        location: `https://api.media.atlassian.com/file/${uuid}/binary?token=eyJ...&dl=true`,
+      },
+      discard: () => Promise.resolve(),
+    });
+
+    const id = await resolveMediaId(
+      "https://jira.example/rest/api/3/attachment/content/164576",
+      "Basic abc",
+      transport,
+    );
+    expect(id).toBe(uuid);
+    // Sends auth, and drains the redirect body.
+    const [, init] = vi.mocked(transport).mock.calls[0];
+    expect(init.headers.Authorization).toBe("Basic abc");
+  });
+
+  it("returns null when the Location has no media-file URL", async () => {
+    const transport: MediaIdTransport = vi.fn<MediaIdTransport>().mockResolvedValue({
+      statusCode: 303,
+      headers: { location: "https://example.com/somewhere/else" },
+      discard: () => Promise.resolve(),
+    });
+    expect(await resolveMediaId("u", "", transport)).toBeNull();
+  });
+
+  it("returns null when there is no Location header", async () => {
+    const transport: MediaIdTransport = vi.fn<MediaIdTransport>().mockResolvedValue({
+      statusCode: 200,
+      headers: {},
+      discard: () => Promise.resolve(),
+    });
+    expect(await resolveMediaId("u", "", transport)).toBeNull();
   });
 });

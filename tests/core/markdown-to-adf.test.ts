@@ -76,4 +76,33 @@ describe("markdownToAdf", () => {
       content: [{ type: "paragraph", content: [] }],
     });
   });
+
+  it("renders an external image URL as an external mediaSingle", () => {
+    const doc = markdownToAdf("![cat](https://example.com/cat.png)");
+    expect(doc.content[0]).toEqual({
+      type: "mediaSingle",
+      attrs: { layout: "center" },
+      content: [
+        {
+          type: "media",
+          attrs: { type: "external", url: "https://example.com/cat.png", alt: "cat" },
+        },
+      ],
+    });
+  });
+
+  it("renders an attachment: marker (media UUID) as a file media node", () => {
+    const uuid = "732375bc-8db1-47d3-8b2a-babf14273bce";
+    const doc = markdownToAdf(`![shot](attachment:${uuid})`);
+    expect(doc.content[0]).toEqual({
+      type: "mediaSingle",
+      attrs: { layout: "center" },
+      content: [
+        {
+          type: "media",
+          attrs: { type: "file", id: uuid, collection: "", alt: "shot" },
+        },
+      ],
+    });
+  });
 });

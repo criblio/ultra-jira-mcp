@@ -20,6 +20,9 @@ import {
   type ConsolidatedTool,
 } from "./dispatcher.js";
 import { jiraAttachment } from "./attachment.js";
+import { handleAttachmentAdd } from "./attachment-upload.js";
+import { assertOperationEnabled } from "../../core/manifest.js";
+import { embedImagesForAction } from "../../core/embed-images.js";
 import { jiraBoard } from "./board.js";
 import { jiraComment } from "./comment.js";
 import { jiraEpic } from "./epic.js";
@@ -145,7 +148,22 @@ export async function handleV2Tool(
   if (!tool) {
     throw new Error(`Not a v2 tool: ${name}`);
   }
-  return dispatchTool(tool, operations, client, args, disabledActions);
+  // Intercept the attachment `add` action: multipart upload can't go
+  // through the JSON manifest dispatcher (see attachment-upload.ts).
+  // Honor JIRA_DISABLED_ACTIONS for its stub operation name so the
+  // safety knob still gates uploads.
+  if (name === "jira_attachment" && args.action === "add") {
+    assertOperationEnabled("attachment.add", disabledActions);
+    return handleAttachmentAdd(client, args);
+  }
+  // Pre-pass: on issue.update / comment.{add,update}, upload any local
+  // images referenced in the markdown body and rewrite them to
+  // attachment markers before the normal markdown→ADF coercion runs.
+  // A no-op (returns the same args) for every other action and for
+  // bodies with no local images.
+  const action = typeof args.action === "string" ? args.action : "";
+  const withImages = await embedImagesForAction(name, action, args, client);
+  return dispatchTool(tool, operations, client, withImages, disabledActions);
 }
 
 // Re-exports useful for tests.

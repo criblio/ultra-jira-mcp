@@ -119,17 +119,33 @@ function isImageOnlyParagraph(tokens: Token[]): boolean {
   );
 }
 
+// Scheme used to mark an image whose bytes have already been uploaded to
+// the issue as an attachment. The embed pre-pass (core/embed-images.ts)
+// rewrites a local-path image `![alt](/path.png)` into
+// `![alt](attachment:<attachmentId>)` after uploading it. We recognize
+// that here and emit a `file` media node (Jira resolves it against the
+// issue's attachments by id) instead of an `external` URL node — the
+// latter only works for publicly reachable URLs, not uploaded files.
+export const ATTACHMENT_URL_SCHEME = "attachment:";
+
 function convertImageToMediaSingle(token: Tokens.Image): AdfNode {
-  const mediaAttrs: Record<string, unknown> = {
-    type: "external",
-    url: token.href,
-  };
+  const mediaAttrs: Record<string, unknown> = mediaAttrsFor(token.href);
   if (token.text) mediaAttrs.alt = token.text;
   return {
     type: "mediaSingle",
     attrs: { layout: "center" },
     content: [{ type: "media", attrs: mediaAttrs }],
   };
+}
+
+// Build the `media` node attrs from an image href: a `file` node for an
+// uploaded-attachment marker, an `external` node otherwise.
+function mediaAttrsFor(href: string): Record<string, unknown> {
+  if (href.startsWith(ATTACHMENT_URL_SCHEME)) {
+    const id = href.slice(ATTACHMENT_URL_SCHEME.length);
+    return { type: "file", id, collection: "" };
+  }
+  return { type: "external", url: href };
 }
 
 function convertCodeBlock(token: Tokens.Code): AdfNode {
