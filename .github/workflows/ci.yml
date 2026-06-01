@@ -18,8 +18,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Node 22 only: undici@8.x (a direct dependency) requires Node
-        # >=22.19, matching package.json engines (">=22").
         node: ['22']
     steps:
       - uses: actions/checkout@v6
