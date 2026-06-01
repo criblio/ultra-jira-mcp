@@ -94,11 +94,30 @@ npm run test:watch      # iterate on a file
 npm run inspector       # @modelcontextprotocol/inspector against build/index.js
 npm run benchmark       # measures tool-list + per-call bytes; needs .env.local
 npm run install-skill   # installs the user-facing Jira skill from this checkout
+npm run relock          # regenerate package-lock.json on Linux (see below)
 ```
 
 For changes that touch the operation manifest, the consolidated tool
 schemas, or the trim layer, run `npm run benchmark` and update
 `docs/BENCHMARK.md` with the new numbers if they shifted materially.
+
+### Lockfile (`npm run relock`)
+
+CI runs `npm ci`, which validates the **entire** optional-dependency
+graph. vitest's bundler (rolldown) lists every platform binding as an
+optionalDependency, and the wasm32 one hard-depends on `@emnapi/core` /
+`@emnapi/runtime` (the WASI fallback). A bare `npm install` on macOS
+installs the native binding and **omits those `@emnapi` packages from
+the lockfile** — so `npm ci` on Linux fails with `Missing: @emnapi/core
+from lock file`.
+
+If you change dependencies, regenerate the lockfile with
+`npm run relock` (runs `npm install --package-lock-only` inside a Linux
+`node:22` container so the platform-conditional entries are captured),
+then commit `package-lock.json`. **Do not run a bare `npm install` on
+macOS afterward** — it strips the `@emnapi` entries back out. Requires
+Docker. `npm run relock:check` fails if a relock would change the
+lockfile (useful as a pre-commit / CI guard).
 
 ## Skills
 
