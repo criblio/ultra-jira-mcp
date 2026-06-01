@@ -57,6 +57,12 @@ export interface AdfMark {
   attrs?: Record<string, unknown>;
 }
 
+export interface AdfDocument {
+  type: "doc";
+  version: 1;
+  content: AdfNode[];
+}
+
 export function adfToMarkdown(doc: unknown): string {
   if (!doc || typeof doc !== "object") return "";
   const blocks = renderBlocks((doc as AdfNode).content ?? [], {
