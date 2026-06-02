@@ -24,6 +24,8 @@ import {
 } from "@scottlepper/mcp-toolkit/manifest";
 
 import type { JiraClient } from "../auth/jira-client.js";
+import type { JiraAttachment } from "../types/jira.js";
+import { uploadAttachment } from "./attachments.js";
 import { coerceBody } from "./body-coerce.js";
 import { trimRegistry, type TrimKey } from "./trim-registry.js";
 
@@ -119,6 +121,18 @@ export const executeJiraOp: ExecuteFn = async (ctx) => {
   // "Operation value must be an Atlassian Document".
   const body = coerceBody(ctx.body);
 
+  // Attachment upload can't ride the JSON dispatch below: Jira's
+  // endpoint wants multipart/form-data + `X-Atlassian-Token: no-check`,
+  // and `client.post` JSON-stringifies the body — which Jira rejects
+  // with HTTP 415. The classic-tool path intercepts this in
+  // `handleV2Tool` before it ever reaches here, but the code-api /
+  // bridge path routes every op through this executor, so without this
+  // branch agents in code-api mode get a 415 on every upload. Route to
+  // the multipart side-channel, mirroring the classic handler.
+  if (op.name === "attachment.add") {
+    return uploadViaAttachmentSideChannel(client, path, body);
+  }
+
   if (op.isAgile) {
     switch (op.verb) {
       case "GET":
@@ -142,6 +156,55 @@ export const executeJiraOp: ExecuteFn = async (ctx) => {
       return client.delete(path, queryParams);
   }
 };
+
+// `attachment.add`'s `filePath` param has `role: "body"`, so the
+// coerced body is `{ filePath: string | string[] }`; `issueIdOrKey` is a
+// path param already interpolated into the operation path
+// (`/issue/<key>/attachments`). Pull the key back out of the path and
+// upload each file via the multipart side-channel, returning the array
+// of created attachments — the same shape Jira's JSON endpoint would
+// return, so the `attachment` trim applies unchanged.
+const ATTACHMENT_PATH_RE = /\/issue\/([^/]+)\/attachments$/;
+
+async function uploadViaAttachmentSideChannel(
+  client: JiraClient,
+  path: string,
+  body: unknown,
+): Promise<JiraAttachment[]> {
+  const match = ATTACHMENT_PATH_RE.exec(path);
+  if (!match) {
+    throw new OperationError(
+      `attachment.add: could not extract issue key from path "${path}".`,
+      "attachment.add",
+    );
+  }
+  const issueIdOrKey = decodeURIComponent(match[1]);
+
+  const filePath = (body as { filePath?: unknown })?.filePath;
+  const filePaths = Array.isArray(filePath) ? filePath : [filePath];
+  const paths = filePaths.filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
+  if (paths.length === 0) {
+    throw new OperationError(
+      "attachment.add: filePath must name at least one file.",
+      "attachment.add",
+    );
+  }
+
+  const url = await client.attachmentUploadUrl(issueIdOrKey);
+  const authorizationHeader = client.getAuthorizationHeader();
+
+  const created: JiraAttachment[] = [];
+  for (const p of paths) {
+    const uploaded = await uploadAttachment(
+      { filePath: p },
+      { url, authorizationHeader },
+    );
+    created.push(...uploaded);
+  }
+  return created;
+}
 
 // --- Dispatcher wrappers ----------------------------------------------
 
