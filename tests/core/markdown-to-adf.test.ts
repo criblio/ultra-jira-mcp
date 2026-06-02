@@ -29,6 +29,50 @@ describe("markdownToAdf", () => {
     expect(findMarks("code")).toEqual(["code"]);
   });
 
+  // ADF puts `code` in an exclusive mark group — stacking it with a
+  // formatting mark makes Jira reject the whole document with an opaque
+  // "not valid ADF" error. Bolding inline code is the natural markdown
+  // pattern that triggers it, so the converter must drop the formatting
+  // mark and keep only `code`.
+  it("never stacks code with formatting marks", () => {
+    const cases = [
+      "**`bolded code`**",
+      "*`italic code`*",
+      "~~`struck code`~~",
+      "**bold then `code` then bold**",
+    ];
+    for (const md of cases) {
+      const doc = markdownToAdf(md);
+      const flat: Array<{ type: string; marks?: Array<{ type: string }> }> = [];
+      const walk = (n: { content?: unknown[]; type: string; marks?: Array<{ type: string }> }) => {
+        if (n.type === "text") flat.push(n);
+        (n.content as typeof flat | undefined)?.forEach((c) =>
+          walk(c as Parameters<typeof walk>[0]),
+        );
+      };
+      walk(doc as Parameters<typeof walk>[0]);
+      const codeNodes = flat.filter((n) =>
+        n.marks?.some((m) => m.type === "code"),
+      );
+      expect(codeNodes.length).toBeGreaterThan(0);
+      for (const node of codeNodes) {
+        expect(node.marks?.map((m) => m.type)).toEqual(["code"]);
+      }
+    }
+  });
+
+  // `link` is in a non-exclusive group, so a clickable inline-code span
+  // (`[`code`](url)`) keeps both marks.
+  it("allows code to combine with a link mark", () => {
+    const doc = markdownToAdf("[`code`](https://example.com)");
+    const inline = (doc.content[0].content ?? []) as Array<{
+      text?: string;
+      marks?: Array<{ type: string }>;
+    }>;
+    const node = inline.find((n) => n.text === "code");
+    expect(node?.marks?.map((m) => m.type).sort()).toEqual(["code", "link"]);
+  });
+
   it("renders headings with the correct level", () => {
     const doc = markdownToAdf("# H1\n\n## H2");
     expect(doc.content[0]).toMatchObject({
