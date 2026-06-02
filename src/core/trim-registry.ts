@@ -30,7 +30,15 @@ export const trimRegistry = {
   issue: issueSummary as TrimFn,
   search: searchSummary as TrimFn,
   comment: commentSummary as TrimFn,
-  attachment: attachmentSummary as TrimFn,
+  // attachment.get returns a single attachment; attachment.add returns
+  // an array (Jira's upload endpoint answers with an array even for one
+  // file). Map over arrays so the upload summary is an array of
+  // summaries, not attachmentSummary applied to the array itself (which
+  // yields a single all-undefined object).
+  attachment: ((input: unknown) =>
+    Array.isArray(input)
+      ? input.map((a) => attachmentSummary(a))
+      : attachmentSummary(input as Parameters<typeof attachmentSummary>[0])) as TrimFn,
   user: userSummary as TrimFn,
   project: projectSummary as TrimFn,
   // Paginated lists — count + metadata, ref carries the items.

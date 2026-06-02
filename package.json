@@ -1,6 +1,6 @@
 {
   "name": "ultra-jira-mcp",
-  "version": "2.3.0",
+  "version": "2.4.2",
   "description": "MCP server for Jira Cloud - provides AI models with full access to Jira functionality",
   "type": "module",
   "bin": {
