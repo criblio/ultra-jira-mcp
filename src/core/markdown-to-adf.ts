@@ -325,8 +325,17 @@ function convertInlineTokens(
       }
       case "codespan": {
         const c = token as Tokens.Codespan;
+        // ADF puts `code` in an exclusive mark group: it may not combine
+        // with the formatting marks (strong/em/strike/underline), or Jira
+        // rejects the *entire* document with the opaque "not valid ADF"
+        // error. Bolded inline code (`**`x`**`) is the common trigger.
+        // `link` lives in a separate group and is allowed alongside code,
+        // so we keep any inherited link mark and drop the rest.
         const codeNode: AdfNode = { type: "text", text: c.text };
-        codeNode.marks = [...marks, { type: "code" }];
+        codeNode.marks = [
+          ...marks.filter((m) => m.type === "link"),
+          { type: "code" },
+        ];
         nodes.push(codeNode);
         break;
       }
