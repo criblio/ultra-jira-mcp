@@ -197,3 +197,4 @@ The benchmark requires `.env.local` with the regular `JIRA_*` vars plus `JIRA_BE
 ## License
 
 MIT
+## Security Review Sat Jun 13 05:20:52 AM UTC 2026
