@@ -198,6 +198,21 @@ export class JiraClient {
     return this.getAuthHeader();
   }
 
+  /**
+   * Build the fully-resolved URL for an issue's attachment-upload
+   * endpoint. Attachment upload is a multipart side-channel (see
+   * core/attachments.ts) that bypasses the JSON request pipeline, so
+   * it can't go through `post()`. It still needs the same token-type +
+   * cloudId-aware base URL the rest of the client uses — exposing it
+   * here keeps `buildUrl`'s scoped-vs-classic logic in one place rather
+   * than re-derived in the uploader. Awaits init so a scoped token has
+   * its cloudId before the URL is built.
+   */
+  async attachmentUploadUrl(issueIdOrKey: string): Promise<string> {
+    await this.ensureInitialized();
+    return this.buildUrl(`/issue/${issueIdOrKey}/attachments`);
+  }
+
   private metadataCacheKey(
     path: string,
     queryParams?: Record<string, string | number | boolean | undefined>,
