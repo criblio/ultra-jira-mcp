@@ -209,6 +209,24 @@ export const operations: Manifest = [
   // Attachment
   // =================================================================
   {
+    // Multipart upload. Declared here for help/listing/disabled-action
+    // parity, but NOT dispatched through this path: the request needs
+    // multipart/form-data + X-Atlassian-Token, which the JSON pipeline
+    // can't produce. handleV2Tool intercepts `jira_attachment add` and
+    // routes it to the side-channel in tools/v2/attachment-upload.ts.
+    // The `filePath` param is read off disk by the server, not sent.
+    name: "attachment.add",
+    description:
+      "Upload local file(s) to an issue as attachments (server reads the bytes from disk).",
+    verb: "POST",
+    pathTemplate: "/issue/{issueIdOrKey}/attachments",
+    params: [
+      { name: "issueIdOrKey", role: "path", required: true },
+      { name: "filePath", role: "body", required: true },
+    ],
+    trim: "attachment",
+  },
+  {
     name: "attachment.get",
     description: "Get metadata for a single attachment.",
     verb: "GET",
