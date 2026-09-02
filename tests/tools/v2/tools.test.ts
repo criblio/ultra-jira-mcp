@@ -283,10 +283,24 @@ describe("jira_comment", () => {
       commentId: "10001",
       body: "edited",
     });
+    // Plain-string `body` is converted to ADF by the body-coerce layer
+    // (Jira v3 rejects non-ADF for comment bodies). Pre-built ADF docs
+    // pass through untouched — see the `add` test above.
     expect(ctx.calls[0]).toMatchObject({
       api: "put",
       path: "/issue/PROJ-1/comment/10001",
-      body: { body: "edited" },
+      body: {
+        body: {
+          type: "doc",
+          version: 1,
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "edited" }],
+            },
+          ],
+        },
+      },
     });
   });
 
