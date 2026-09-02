@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+// Mock the multipart side-channel so the attachment.add dispatch test
+// can assert routing without a network call. The real upload is covered
+// by tests/core/attachments.test.ts.
+const uploadAttachmentMock = vi.fn();
+vi.mock("../../src/core/attachments.js", () => ({
+  uploadAttachment: (...args: unknown[]) => uploadAttachmentMock(...args),
+}));
+
 import type { JiraClient } from "../../src/auth/jira-client.js";
 import {
   extractPathParams,
@@ -45,6 +53,10 @@ function makeMockClient(): {
     agilePost: record("agilePost"),
     agilePut: record("agilePut"),
     agileDelete: record("agileDelete"),
+    attachmentUploadUrl: vi.fn((issueIdOrKey: string) =>
+      Promise.resolve(`https://example/rest/api/3/issue/${issueIdOrKey}/attachments`),
+    ),
+    getAuthorizationHeader: vi.fn(() => "Basic test"),
   } as unknown as JiraClient;
 
   return {
@@ -211,6 +223,17 @@ const manifest: Manifest = [
     ],
   },
   {
+    name: "attachment.add",
+    description: "",
+    verb: "POST",
+    pathTemplate: "/issue/{issueIdOrKey}/attachments",
+    params: [
+      { name: "issueIdOrKey", role: "path", required: true },
+      { name: "filePath", role: "body", required: true },
+    ],
+    trim: "attachment",
+  },
+  {
     name: "broken.rawString",
     description: "",
     verb: "POST",
@@ -361,6 +384,64 @@ describe("invokeOperation", () => {
     await expect(
       invokeOperation(manifest, ctx.client, "broken.rawString", { a: "x", b: "y" }),
     ).rejects.toThrow(/rawString.*must be exactly 1/);
+  });
+
+  // Regression: attachment.add must NOT go through the JSON dispatcher
+  // (client.post), which Jira's multipart-only endpoint rejects with
+  // HTTP 415. The classic-tool path intercepts it; the code-api/bridge
+  // path routes through executeJiraOp, so the interception has to live
+  // there too. See the attachment side-channel in src/core/manifest.ts.
+  it("routes attachment.add through the multipart side-channel, not client.post", async () => {
+    uploadAttachmentMock.mockReset();
+    uploadAttachmentMock.mockResolvedValue([
+      { id: "1", filename: "a.png", mimeType: "image/png", size: 70 },
+    ]);
+    const ctx = makeMockClient();
+
+    const result = await invokeOperation(manifest, ctx.client, "attachment.add", {
+      issueIdOrKey: "PROJ-1",
+      filePath: "/tmp/a.png",
+    });
+
+    // No JSON POST — that is the bug this guards against.
+    expect(ctx.calls).toEqual([]);
+    // Routed to the side-channel with the per-issue upload URL + auth.
+    expect(uploadAttachmentMock).toHaveBeenCalledTimes(1);
+    expect(uploadAttachmentMock).toHaveBeenCalledWith(
+      { filePath: "/tmp/a.png" },
+      {
+        url: "https://example/rest/api/3/issue/PROJ-1/attachments",
+        authorizationHeader: "Basic test",
+      },
+    );
+    // The attachment trim maps over the array → array of summaries.
+    expect(result).toEqual([
+      { id: "1", filename: "a.png", mimeType: "image/png", size: 70 },
+    ]);
+  });
+
+  it("attachment.add uploads each file when given an array", async () => {
+    uploadAttachmentMock.mockReset();
+    uploadAttachmentMock
+      .mockResolvedValueOnce([
+        { id: "1", filename: "a.png", mimeType: "image/png", size: 1 },
+      ])
+      .mockResolvedValueOnce([
+        { id: "2", filename: "b.png", mimeType: "image/png", size: 2 },
+      ]);
+    const ctx = makeMockClient();
+
+    const result = await invokeOperation(manifest, ctx.client, "attachment.add", {
+      issueIdOrKey: "PROJ-1",
+      filePath: ["/tmp/a.png", "/tmp/b.png"],
+    });
+
+    expect(ctx.calls).toEqual([]);
+    expect(uploadAttachmentMock).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { id: "1", filename: "a.png", mimeType: "image/png", size: 1 },
+      { id: "2", filename: "b.png", mimeType: "image/png", size: 2 },
+    ]);
   });
 });
 
