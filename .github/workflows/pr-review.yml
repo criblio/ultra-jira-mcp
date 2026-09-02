@@ -59,7 +59,7 @@ jobs:
       # Always check out main. Never the PR. The PR's contents are pulled in
       # later as a diff file — data, not executable code.
       - name: Checkout main (never the PR)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
