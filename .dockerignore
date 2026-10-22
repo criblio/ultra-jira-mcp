@@ -1,0 +1,7 @@
+.git
+**/node_modules
+build
+# The server loads .env / .env.local from its working directory; never bake a
+# developer's credentials into the image.
+.env
+.env.*
