@@ -110,4 +110,7 @@ jobs:
         if: success()
         run: gh pr review --approve "${{ steps.pr-info.outputs.pr_number }}"
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          # Built-in token, not a PAT: the enterprise rejects fine-grained PATs
+          # with a lifetime over 366 days. Requires the repo setting "Allow
+          # GitHub Actions to create and approve pull requests".
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
