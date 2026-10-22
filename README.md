@@ -80,6 +80,41 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
+### Docker
+
+To keep `npm ci` and dependency install scripts off your machine, build the image from a checkout:
+
+```bash
+docker build -t ultra-jira-mcp .
+```
+
+Then point your MCP client at `docker run`. Each `-e NAME` flag (no value) passes that variable through from the `env` block, so the token never appears in the container's command line:
+
+```json
+{
+  "mcpServers": {
+    "jira": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm", "--init",
+        "-v", "/tmp/jira-mcp:/tmp/jira-mcp",
+        "-e", "JIRA_HOST", "-e", "JIRA_EMAIL", "-e", "JIRA_API_TOKEN",
+        "ultra-jira-mcp"
+      ],
+      "env": {
+        "JIRA_HOST": "https://yourcompany.atlassian.net",
+        "JIRA_EMAIL": "your-email@example.com",
+        "JIRA_API_TOKEN": "your-api-token"
+      }
+    }
+  }
+}
+```
+
+- The `/tmp/jira-mcp` mount puts the full responses at the same path on the host, so the `ref: /path` in each summary stays readable by the agent.
+- Pass `JIRA_CLOUD_ID`, `JIRA_ENABLED_CATEGORIES` or `JIRA_DISABLED_ACTIONS` the same way (`-e NAME` plus an `env` entry) if you use them.
+- Use classic mode. code-api mode hands the agent a CLI path and a unix socket inside the container, which a host shell can't reach.
+
 ## Tool surface
 
 Default mode is **classic**: 16 consolidated MCP tools, each taking an `action` argument plus action-specific args. For example `jira_issue` covers `get`, `create`, `update`, `delete`, `bulkCreate`, `listTransitions`, `transition`, `assign`, `changelog` — discriminated by `action: "..."`.
