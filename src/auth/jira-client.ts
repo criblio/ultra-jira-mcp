@@ -1,4 +1,4 @@
-import { httpRequest } from "@scottlepper/mcp-toolkit/transport";
+import { httpRequest, type TransportFn } from "@scottlepper/mcp-toolkit/transport";
 import { TtlLruCache } from "@scottlepper/mcp-toolkit/lru";
 import { readTenantCache, writeTenantCache } from "../core/tenant-cache.js";
 import { JiraConfig } from "../config.js";
@@ -48,8 +48,12 @@ export class JiraClient {
     ttlMs: METADATA_TTL_MS,
   });
 
-  constructor(config: JiraConfig) {
+  private readonly transportFn: TransportFn;
+
+  // transportFn lets a caller swap out how requests actually go over
+  constructor(config: JiraConfig, transportFn: TransportFn = httpRequest) {
     this.config = config;
+    this.transportFn = transportFn;
 
     // If cloudId is provided in config, use it directly
     if (config.cloudId) {
@@ -104,7 +108,7 @@ export class JiraClient {
     }
 
     const tenantInfoUrl = `${this.config.host}/_edge/tenant_info`;
-    const response = await httpRequest(tenantInfoUrl, {
+    const response = await this.transportFn(tenantInfoUrl, {
       method: "GET",
       headers: { Accept: "application/json" },
     });
@@ -259,7 +263,7 @@ export class JiraClient {
       headers["Content-Type"] = "application/json";
     }
 
-    const response = await httpRequest(url, {
+    const response = await this.transportFn(url, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
