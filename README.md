@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/criblio-ultra-jira-mcp-badge.png)](https://mseep.ai/app/criblio-ultra-jira-mcp)
+
 # Ultra Jira MCP Server/CLI
 
 A token-efficient **Jira MCP server** and CLI for Claude, ChatGPT, Cursor, Cline, and any other Model Context Protocol (MCP) client. Gives AI agents full access to **Jira Cloud** via the REST API v3 and Agile API 1.0 — without burning your context window on Jira's verbose JSON.
