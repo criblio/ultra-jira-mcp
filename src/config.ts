@@ -146,6 +146,34 @@ function parseToolFilter(): ToolFilterConfig {
   };
 }
 
+// Settings every session of a shared HTTP server has in common. The
+// credentials come per session from request headers instead.
+export type JiraServerConfig = Omit<JiraConfig, "email" | "apiToken" | "tokenType">;
+
+export function getServerConfig(): JiraServerConfig {
+  const host = process.env.JIRA_HOST;
+  if (!host) {
+    throw new Error(
+      "Missing required environment variable: JIRA_HOST\n\n" +
+        "  JIRA_HOST - Your Jira instance URL (e.g., https://yourcompany.atlassian.net)",
+    );
+  }
+  return {
+    host: host.replace(/\/+$/, ""),
+    cloudId: process.env.JIRA_CLOUD_ID,
+    toolMode: parseToolMode(process.env.JIRA_TOOL_MODE),
+    toolFilter: parseToolFilter(),
+  };
+}
+
+export function withCredentials(
+  base: JiraServerConfig,
+  email: string,
+  apiToken: string,
+): JiraConfig {
+  return { ...base, email, apiToken, tokenType: detectTokenType(apiToken) };
+}
+
 export function getConfig(): JiraConfig {
   const host = process.env.JIRA_HOST;
   const email = process.env.JIRA_EMAIL;

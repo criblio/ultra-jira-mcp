@@ -115,6 +115,53 @@ Then point your MCP client at `docker run`. Each `-e NAME` flag (no value) passe
 - Pass `JIRA_CLOUD_ID`, `JIRA_ENABLED_CATEGORIES` or `JIRA_DISABLED_ACTIONS` the same way (`-e NAME` plus an `env` entry) if you use them.
 - Use classic mode. code-api mode hands the agent a CLI path and a unix socket inside the container, which a host shell can't reach.
 
+### Shared HTTP server
+
+By default every MCP client session starts its own server over stdio. With `JIRA_MCP_TRANSPORT=http`, one long-running server answers all of your sessions over streamable HTTP. It needs no Jira credentials of its own: each session sends its email and API token as request headers and gets its own Jira client.
+
+| Variable | Description | Default |
+|---|---|---|
+| `JIRA_MCP_TRANSPORT` | `stdio` or `http` | `stdio` |
+| `JIRA_MCP_HTTP_HOST` | Address the HTTP server listens on | `127.0.0.1` |
+| `JIRA_MCP_HTTP_PORT` | Port the HTTP server listens on | `18001` |
+
+In HTTP mode the server needs `JIRA_HOST`, plus `JIRA_CLOUD_ID`, `JIRA_ENABLED_CATEGORIES` and `JIRA_DISABLED_ACTIONS` if you use them. It ignores `JIRA_EMAIL` and `JIRA_API_TOKEN`. It serves classic mode only and refuses to start with `JIRA_TOOL_MODE=code-api`.
+
+Run it in Docker, published on the host's loopback only:
+
+```bash
+docker run -d --name jira-mcp --restart unless-stopped \
+  -p 127.0.0.1:18001:18001 \
+  -v /tmp/jira-mcp:/tmp/jira-mcp \
+  -e JIRA_MCP_TRANSPORT=http -e JIRA_MCP_HTTP_HOST=0.0.0.0 \
+  -e JIRA_HOST=https://yourcompany.atlassian.net \
+  ultra-jira-mcp
+```
+
+Then point each Claude Code session at it, in `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "jira": {
+      "type": "http",
+      "url": "http://127.0.0.1:18001/mcp",
+      "headers": {
+        "Jira-Email": "your-email@example.com",
+        "Jira-Api-Token": "${JIRA_API_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Claude Code fills in `${JIRA_API_TOKEN}` from the environment it was started in, so the token stays out of the config file.
+
+- `JIRA_MCP_HTTP_HOST=0.0.0.0` is for inside a container only. Outside one, keep the `127.0.0.1` default.
+- The server only accepts requests whose `Host` is `localhost`, `127.0.0.1` or `[::1]` at the port it listens on, which blocks DNS rebinding from a web page. Publish the same port number on the host as inside the container.
+- A session keeps the credentials it started with. A later request in that session with a different `Jira-Email` or `Jira-Api-Token` gets a 403. A new session without both headers gets a 401.
+- All sessions run in one process, so they share its files: whatever the server writes goes to one session directory under `/tmp/jira-mcp`, and the attachment upload action can read any file the server can. Run one shared server per person rather than one for a team.
+
 ## Tool surface
 
 Default mode is **classic**: 16 consolidated MCP tools, each taking an `action` argument plus action-specific args. For example `jira_issue` covers `get`, `create`, `update`, `delete`, `bulkCreate`, `listTransitions`, `transition`, `assign`, `changelog` — discriminated by `action: "..."`.
