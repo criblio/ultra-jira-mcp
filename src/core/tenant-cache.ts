@@ -23,7 +23,7 @@
 import {
   readDiskCache,
   writeDiskCache,
-} from "@scottlepper/mcp-toolkit/disk-cache";
+} from "ultra-mcp-toolkit/disk-cache";
 
 import { jiraSandbox } from "./sandbox.js";
 

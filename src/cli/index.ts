@@ -3,12 +3,12 @@
 //
 // All argv parsing, help rendering, bridge round-trip, install-skill
 // dispatch, and the trimmed-summary + `ref:` stdout layout live in
-// `@scottlepper/mcp-toolkit/cli`. This file wires in the Jira-specific
+// `ultra-mcp-toolkit/cli`. This file wires in the Jira-specific
 // bits: the operation manifest, the direct-mode handler (which builds
 // a JiraClient in-process when no socket is configured), the SKILL.md
 // content, and the env vars to mention in the help text.
 
-import { createCli } from "@scottlepper/mcp-toolkit/cli";
+import { createCli } from "ultra-mcp-toolkit/cli";
 
 import { operations } from "../core/operations.js";
 import { callDirect } from "./direct.js";

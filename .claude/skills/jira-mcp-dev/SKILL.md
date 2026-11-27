@@ -60,7 +60,7 @@ The common case. Steps, in order:
 
 ## The toolkit boundary — stay on the right side
 
-Generic MCP plumbing lives in `@scottlepper/mcp-toolkit`. This repo
+Generic MCP plumbing lives in `ultra-mcp-toolkit`. This repo
 owns Jira-shaped logic only. Concretely:
 
 - **In the toolkit, do not duplicate here:** stdio server setup, the
@@ -77,7 +77,7 @@ If you find yourself writing something generic in `src/`, stop and
 check whether it belongs in the toolkit. If you need a toolkit
 change, change it in the toolkit repo and bump the dep here.
 
-Never patch files under `node_modules/@scottlepper/mcp-toolkit/`.
+Never patch files under `node_modules/ultra-mcp-toolkit/`.
 
 ## Commands
 

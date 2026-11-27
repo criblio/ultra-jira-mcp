@@ -8,7 +8,7 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { startStdioServer } from "@scottlepper/mcp-toolkit/stdio";
+import { startStdioServer } from "ultra-mcp-toolkit/stdio";
 
 import { getConfig, type JiraConfig } from "./config.js";
 import { JiraClient, JiraApiError } from "./auth/jira-client.js";
@@ -26,7 +26,7 @@ import {
   JIRA_CODE_API_TOOL_NAME,
   type CodeApiToolContext,
 } from "./codeapi/tool.js";
-import { closeHttpPool } from "@scottlepper/mcp-toolkit/transport";
+import { closeHttpPool } from "ultra-mcp-toolkit/transport";
 
 // --- Server -----------------------------------------------------------
 

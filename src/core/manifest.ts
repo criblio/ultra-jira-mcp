@@ -2,7 +2,7 @@
 //
 // All generic manifest plumbing (Operation type, splitArgs,
 // interpolatePath, findOperation, query-param coercion, rawString body
-// handling, executor hook) lives in `@scottlepper/mcp-toolkit/manifest`.
+// handling, executor hook) lives in `ultra-mcp-toolkit/manifest`.
 // This module:
 //
 //   1. Extends `Operation` with `isAgile?: boolean` so existing entries
@@ -21,7 +21,7 @@ import {
   type Operation as ToolkitOperation,
   invokeOperation as toolkitInvokeOperation,
   invokeOperationRaw as toolkitInvokeOperationRaw,
-} from "@scottlepper/mcp-toolkit/manifest";
+} from "ultra-mcp-toolkit/manifest";
 
 import type { JiraClient } from "../auth/jira-client.js";
 import type { JiraAttachment } from "../types/jira.js";
@@ -38,9 +38,9 @@ export {
   splitArgs,
   findOperation,
   defaultExecute,
-} from "@scottlepper/mcp-toolkit/manifest";
+} from "ultra-mcp-toolkit/manifest";
 
-import { OperationError } from "@scottlepper/mcp-toolkit/manifest";
+import { OperationError } from "ultra-mcp-toolkit/manifest";
 
 // Override the toolkit's generic "Operation X is disabled." message
 // with one that names the env var the user needs to edit. The bridge
@@ -68,7 +68,7 @@ export type {
   ExecuteContext,
   ExecuteFn,
   InvokeOptions,
-} from "@scottlepper/mcp-toolkit/manifest";
+} from "ultra-mcp-toolkit/manifest";
 
 // --- Jira extensions --------------------------------------------------
 

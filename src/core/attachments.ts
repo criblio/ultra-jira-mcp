@@ -31,7 +31,7 @@ import {
   sanitizeFilename,
   type DownloadTransport,
   type SingleConsumptionResponse,
-} from "@scottlepper/mcp-toolkit/streaming";
+} from "ultra-mcp-toolkit/streaming";
 
 import { jiraSandbox } from "./sandbox.js";
 import type { JiraAttachment } from "../types/jira.js";
