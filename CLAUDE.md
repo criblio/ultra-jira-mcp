@@ -8,8 +8,16 @@ toolkit; this repo owns Jira-specific code only.
 
 ## Layout
 
-- `src/index.ts` — MCP stdio server entry. Wires the two modes
-  (classic / code-api) to the toolkit's `startStdioServer`.
+- `src/index.ts` — MCP server entry. Picks the transport from
+  `JIRA_MCP_TRANSPORT`: stdio (default) wires the two modes
+  (classic / code-api) to the toolkit's `startStdioServer`; `http`
+  starts the shared server in `src/http-server.ts`.
+- `src/server.ts` — `createJiraServer`, the MCP `Server` with its
+  tool and resource handlers. stdio builds one; HTTP builds one per
+  session.
+- `src/http-server.ts` — shared streamable-HTTP mode on the toolkit's
+  `startHttpServer`. Each session's Jira credentials come from its
+  `Jira-Email` / `Jira-Api-Token` request headers. Classic mode only.
 - `src/cli/index.ts` — `jira-cli` entry. Delegates argv parsing, help,
   bridge round-trip, and `install-skill` to `ultra-mcp-toolkit/cli`.
 - `src/core/operations.ts` — the operation manifest. One entry per
