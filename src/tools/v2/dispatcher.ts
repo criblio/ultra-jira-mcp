@@ -22,7 +22,7 @@ import {
   FULL_META_KEY as TOOLKIT_FULL_META_KEY,
   ToolError,
   type ConsolidatedToolDef as ToolkitConsolidatedToolDef,
-} from "@scottlepper/mcp-toolkit/tool";
+} from "ultra-mcp-toolkit/tool";
 
 export { ToolError };
 

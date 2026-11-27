@@ -8,7 +8,7 @@
 import {
   createSandbox,
   type SandboxInstance,
-} from "@scottlepper/mcp-toolkit/sandbox";
+} from "ultra-mcp-toolkit/sandbox";
 
 export const jiraSandbox: SandboxInstance = createSandbox({
   rootName: "jira-mcp",
@@ -29,4 +29,4 @@ export const __resetSessionCacheDirForTests: SandboxInstance["__resetSessionCach
 export type {
   CleanupError,
   CleanupResult,
-} from "@scottlepper/mcp-toolkit/sandbox";
+} from "ultra-mcp-toolkit/sandbox";

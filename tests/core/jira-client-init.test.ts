@@ -12,7 +12,7 @@ import {
   __setTransportForTests,
   type HttpResponse,
   type TransportFn,
-} from "@scottlepper/mcp-toolkit/transport";
+} from "ultra-mcp-toolkit/transport";
 import { rootCacheDir } from "../../src/core/sandbox.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";

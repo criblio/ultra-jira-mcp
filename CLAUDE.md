@@ -3,7 +3,7 @@
 Token-efficient MCP server **and** CLI for Jira Cloud (published as
 `ultra-jira-mcp` on npm; the server bin is `ultra-jira-mcp` —
 `jira-mcp` remains as an alias — and the CLI bin is `jira-cli`).
-Built on `@scottlepper/mcp-toolkit` — generic MCP plumbing lives in the
+Built on `ultra-mcp-toolkit` — generic MCP plumbing lives in the
 toolkit; this repo owns Jira-specific code only.
 
 ## Layout
@@ -11,7 +11,7 @@ toolkit; this repo owns Jira-specific code only.
 - `src/index.ts` — MCP stdio server entry. Wires the two modes
   (classic / code-api) to the toolkit's `startStdioServer`.
 - `src/cli/index.ts` — `jira-cli` entry. Delegates argv parsing, help,
-  bridge round-trip, and `install-skill` to `mcp-toolkit/cli`.
+  bridge round-trip, and `install-skill` to `ultra-mcp-toolkit/cli`.
 - `src/core/operations.ts` — the operation manifest. One entry per
   Jira REST/Agile endpoint. Both classic tools and code-api dispatch
   read from this single source of truth.
@@ -71,7 +71,7 @@ and `npx jira-cli <op>` works without any MCP server in the picture.
 This split was the entire point of [PR #210](https://github.com/scottlepp/ultra-jira-mcp/pull/210)
 (toolkit migration). Don't blur it:
 
-- **In `@scottlepper/mcp-toolkit`**: vendor-agnostic primitives —
+- **In `ultra-mcp-toolkit`**: vendor-agnostic primitives —
   stdio transport, manifest type + dispatcher, generic CLI builder
   (`createCli`), bridge socket protocol, response sandboxing,
   install-skill writer.
@@ -139,6 +139,6 @@ lockfile (useful as a pre-commit / CI guard).
   `tests/codeapi/`, `tests/tools/`). New manifest entries get a
   smoke test that exercises the dispatcher path; new trims get a
   fixture-based unit test.
-- Don't reach into `node_modules/@scottlepper/mcp-toolkit/` to patch
+- Don't reach into `node_modules/ultra-mcp-toolkit/` to patch
   toolkit code from this repo. If the toolkit needs a change, change
   it there.

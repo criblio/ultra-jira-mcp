@@ -1,5 +1,5 @@
-import { httpRequest, type TransportFn } from "@scottlepper/mcp-toolkit/transport";
-import { TtlLruCache } from "@scottlepper/mcp-toolkit/lru";
+import { httpRequest, type TransportFn } from "ultra-mcp-toolkit/transport";
+import { TtlLruCache } from "ultra-mcp-toolkit/lru";
 import { readTenantCache, writeTenantCache } from "../core/tenant-cache.js";
 import { JiraConfig } from "../config.js";
 

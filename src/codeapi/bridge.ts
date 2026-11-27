@@ -2,7 +2,7 @@
 //
 // All socket handling, wire format, connection lifecycle, and the
 // invoke→sandbox dispatch loop live in
-// `@scottlepper/mcp-toolkit/bridge`. This module:
+// `ultra-mcp-toolkit/bridge`. This module:
 //
 //   1. Pins the address to a `jmcp-<hash>.sock` filename under
 //      ${TMPDIR} when the session-cache path is too long for
@@ -23,7 +23,7 @@ import {
   defaultBridgeAddress as toolkitDefaultBridgeAddress,
   type BridgeAddress,
   type BridgeServer,
-} from "@scottlepper/mcp-toolkit/bridge";
+} from "ultra-mcp-toolkit/bridge";
 import type { JiraClient } from "../auth/jira-client.js";
 import { makeJiraExecutor, type Manifest } from "../core/manifest.js";
 import { jiraSandbox } from "../core/sandbox.js";
